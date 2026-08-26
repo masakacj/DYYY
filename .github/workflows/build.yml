@@ -27,6 +27,7 @@ jobs:
           python3 .github/scripts/resolve_full_aweme.py .
           python3 .github/scripts/fix_api_download_rename.py .
           python3 .github/scripts/bind_api_quality_context.py .
+          python3 .github/scripts/align_api_with_save_video.py .
           git diff -- DYYYManager.h DYYYManager.m DYYYLongPressPanel.xm
 
       - name: Check cache
@@ -94,7 +95,7 @@ jobs:
             Download filename format:
             `作者名字_抖音号_yyyyMMdd_HHmm.ext`
 
-            API download metadata is captured per request and carried into each quality-selection action, so clicking 原画/720P uses the work that opened that quality menu rather than global previous-download state.
+            API download now acquires the current aweme at click time using the same flow as Save Video in both Modern and Classic long-press panels, then carries that filename context into the later quality-selection action.
 
             Multi-image resources append `_01`, `_02`, etc.
           prerelease: false
