@@ -17,6 +17,11 @@ jobs:
         with:
           submodules: true
 
+      - name: Apply custom download filename patch
+        run: |
+          python3 .github/scripts/apply_filename_patch.py .
+          git diff -- DYYYManager.h DYYYManager.m DYYYLongPressPanel.xm
+
       - name: Check cache
         run: |
           echo upstream_heads=`git ls-remote https://github.com/roothide/theos | head -n 1 | cut -f 1`-`git ls-remote https://github.com/theos/sdks | head -n 1 | cut -f 1` >> $GITHUB_ENV
@@ -42,8 +47,21 @@ jobs:
           make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1 -j$(sysctl -n hw.ncpu)
           make package THEOS_PACKAGE_SCHEME=roothide FINALPACKAGE=1 -j$(sysctl -n hw.ncpu)
 
+      - name: Collect dylib
+        if: always()
+        run: |
+          mkdir -p build-artifacts
+          find .theos -type f -name 'DYYY.dylib' -print -exec cp -f {} build-artifacts/DYYY.dylib \; || true
+
       - name: Upload specific Deb packages
         uses: actions/upload-artifact@v4.6.0
         with:
-          name: DYYY
+          name: DYYY-deb
           path: ${{ github.workspace }}/packages/*.deb
+
+      - name: Upload DYYY dylib
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name: DYYY-dylib
+          path: ${{ github.workspace }}/build-artifacts/DYYY.dylib
+          if-no-files-found: warn
