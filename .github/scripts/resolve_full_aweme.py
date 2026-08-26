@@ -55,19 +55,41 @@ new = r'''+ (id)dyyy_safeValueForObject:(id)obj key:(NSString *)key {
     return nickname.length > 0 || shortID.length > 0 || uniqueID.length > 0 || uid.length > 0;
 }
 
++ (BOOL)dyyy_aweme:(id)candidate matchesSource:(id)source {
+    if (!candidate || !source) return NO;
+
+    NSString *sourceItemID = [self dyyy_safeValueForObject:source key:@"itemID"];
+    NSString *candidateItemID = [self dyyy_safeValueForObject:candidate key:@"itemID"];
+    if (sourceItemID.length > 0 && candidateItemID.length > 0) {
+        return [sourceItemID isEqualToString:candidateItemID];
+    }
+
+    NSString *sourceShareURL = [self dyyy_safeValueForObject:source key:@"shareURL"];
+    NSString *candidateShareURL = [self dyyy_safeValueForObject:candidate key:@"shareURL"];
+    if (sourceShareURL.length > 0 && candidateShareURL.length > 0) {
+        return [sourceShareURL isEqualToString:candidateShareURL];
+    }
+
+    return candidate == source;
+}
+
 + (id)dyyy_resolveFullAweme:(AWEAwemeModel *)awemeModel {
     if ([self dyyy_awemeHasUsableAuthor:awemeModel]) return awemeModel;
 
     id currentAweme = [self dyyy_safeValueForObject:awemeModel key:@"currentAweme"];
-    if ([self dyyy_awemeHasUsableAuthor:currentAweme]) return currentAweme;
-
-    // 某些长按面板拿到的是轻量模型，尝试常见嵌套字段。
-    for (NSString *key in @[@"aweme", @"awemeModel", @"model", @"item", @"rawAweme"]) {
-        id nested = [self dyyy_safeValueForObject:awemeModel key:key];
-        if ([self dyyy_awemeHasUsableAuthor:nested]) return nested;
+    if ([self dyyy_awemeHasUsableAuthor:currentAweme] &&
+        ([self dyyy_aweme:currentAweme matchesSource:awemeModel] || awemeModel == currentAweme)) {
+        return currentAweme;
     }
 
-    // 最后从当前可见播放控制器树里找完整 AWEAwemeModel。
+    for (NSString *key in @[@"aweme", @"awemeModel", @"model", @"item", @"rawAweme"]) {
+        id nested = [self dyyy_safeValueForObject:awemeModel key:key];
+        if ([self dyyy_awemeHasUsableAuthor:nested] &&
+            [self dyyy_aweme:nested matchesSource:awemeModel]) {
+            return nested;
+        }
+    }
+
     UIWindow *window = nil;
     for (UIWindow *candidateWindow in [UIApplication sharedApplication].windows) {
         if (!candidateWindow.hidden && candidateWindow.alpha > 0.0 && candidateWindow.windowLevel == UIWindowLevelNormal) {
@@ -88,7 +110,10 @@ new = r'''+ (id)dyyy_safeValueForObject:(id)obj key:(NSString *)key {
         [visited addObject:ptr];
 
         id candidate = [self dyyy_safeValueForObject:vc key:@"model"];
-        if ([self dyyy_awemeHasUsableAuthor:candidate]) return candidate;
+        if ([self dyyy_awemeHasUsableAuthor:candidate] &&
+            [self dyyy_aweme:candidate matchesSource:awemeModel]) {
+            return candidate;
+        }
 
         if (vc.presentedViewController) [queue addObject:vc.presentedViewController];
         if ([vc isKindOfClass:[UINavigationController class]]) {
@@ -144,4 +169,4 @@ if new not in text:
     text = text.replace(old, new, 1)
 
 manager.write_text(text, encoding="utf-8")
-print("Applied full aweme metadata resolver")
+print("Applied current-aweme identity-matched metadata resolver")
