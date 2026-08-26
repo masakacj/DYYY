@@ -43,10 +43,12 @@ if "DYYYFilenamePatchHelpers" not in m:
 #pragma mark - DYYYFilenamePatchHelpers
 
 static AWEAwemeModel *sDYYYDownloadAwemeModel = nil;
+static NSString *sDYYYDownloadStem = nil;
 static NSInteger sDYYYLiveSequence = 0;
 
 + (void)setDownloadAwemeModel:(AWEAwemeModel *)awemeModel {
     sDYYYDownloadAwemeModel = awemeModel;
+    sDYYYDownloadStem = [self dyyy_downloadStemForAweme:awemeModel];
     sDYYYLiveSequence = 0;
 }
 
@@ -99,7 +101,10 @@ static NSInteger sDYYYLiveSequence = 0;
 }
 
 + (NSString *)dyyy_filenameForMediaType:(MediaType)mediaType index:(NSInteger)index {
-    NSString *stem = [self dyyy_downloadStemForAweme:sDYYYDownloadAwemeModel];
+    NSString *stem = sDYYYDownloadStem;
+    if (stem.length == 0) {
+        stem = [self dyyy_downloadStemForAweme:sDYYYDownloadAwemeModel];
+    }
     if (index > 0) stem = [stem stringByAppendingFormat:@"_%02ld", (long)index];
     return [stem stringByAppendingPathExtension:[self dyyy_defaultExtensionForMediaType:mediaType]];
 }
@@ -188,7 +193,10 @@ lp_old = '''    NSString *uniqueID = [NSUUID UUID].UUIDString;
     NSString *videoPath = [livePhotoPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.mp4", uniqueID]];'''
 lp_new = '''    NSString *uniqueID = [NSUUID UUID].UUIDString;
     NSInteger liveIndex = ++sDYYYLiveSequence;
-    NSString *liveStem = [self dyyy_downloadStemForAweme:sDYYYDownloadAwemeModel];
+    NSString *liveStem = sDYYYDownloadStem;
+    if (liveStem.length == 0) {
+        liveStem = [self dyyy_downloadStemForAweme:sDYYYDownloadAwemeModel];
+    }
     if (liveStem.length == 0) liveStem = uniqueID;
     liveStem = [liveStem stringByAppendingFormat:@"_%02ld", (long)liveIndex];
     NSString *imagePath = [livePhotoPath stringByAppendingPathComponent:[liveStem stringByAppendingPathExtension:@"heic"]];
@@ -207,6 +215,7 @@ if "[DYYYManager setDownloadAwemeModel:awemeModel];" not in lp:
 api_old = '''        apiDownload.action = ^{
           NSString *shareLink = [self.awemeModel valueForKey:@"shareURL"];'''
 api_new = '''        apiDownload.action = ^{
+          // 接口解析是异步链路，先在点击瞬间冻结作者/抖音号/发布时间命名上下文
           [DYYYManager setDownloadAwemeModel:self.awemeModel];
           NSString *shareLink = [self.awemeModel valueForKey:@"shareURL"];'''
 if api_new not in lp:
