@@ -8,6 +8,9 @@ on:
     branches-ignore:
       - dev
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
@@ -16,6 +19,7 @@ jobs:
       - uses: actions/checkout@v4.2.2
         with:
           submodules: true
+          fetch-depth: 0
 
       - name: Apply custom download filename patch
         run: |
@@ -40,28 +44,57 @@ jobs:
         run: |
           echo "$(brew --prefix)/opt/make/libexec/gnubin" >> $GITHUB_PATH
 
-      - name: Build package
+      - name: Build rootful package and collect injection dylib
         run: |
-          rm -f packages/*
+          rm -rf packages build-artifacts
+          mkdir -p build-artifacts
           make package FINALPACKAGE=1 -j$(sysctl -n hw.ncpu)
+          DYYYPATH=$(find .theos -type f -name 'DYYY.dylib' | head -n 1)
+          if [ -z "$DYYYPATH" ]; then
+            echo "DYYY.dylib not found after rootful build"
+            exit 1
+          fi
+          cp -f "$DYYYPATH" build-artifacts/DYYY.dylib
+          file build-artifacts/DYYY.dylib
+
+      - name: Build rootless package
+        run: |
           make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1 -j$(sysctl -n hw.ncpu)
+
+      - name: Build roothide package
+        run: |
           make package THEOS_PACKAGE_SCHEME=roothide FINALPACKAGE=1 -j$(sysctl -n hw.ncpu)
 
-      - name: Collect dylib
-        if: always()
+      - name: Upload Actions artifacts
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name: DYYY-custom-build
+          path: |
+            ${{ github.workspace }}/packages/*.deb
+            ${{ github.workspace }}/build-artifacts/DYYY.dylib
+
+      - name: Move custom-latest tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          mkdir -p build-artifacts
-          find .theos -type f -name 'DYYY.dylib' -print -exec cp -f {} build-artifacts/DYYY.dylib \; || true
+          git tag -f custom-latest "$GITHUB_SHA"
+          git push origin refs/tags/custom-latest --force
 
-      - name: Upload specific Deb packages
-        uses: actions/upload-artifact@v4.6.0
+      - name: Publish Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
         with:
-          name: DYYY-deb
-          path: ${{ github.workspace }}/packages/*.deb
+          tag_name: custom-latest
+          name: DYYY Custom Latest
+          body: |
+            Custom build based on masakacj/DYYY main.
 
-      - name: Upload DYYY dylib
-        uses: actions/upload-artifact@v4.6.0
-        with:
-          name: DYYY-dylib
-          path: ${{ github.workspace }}/build-artifacts/DYYY.dylib
-          if-no-files-found: warn
+            Download filename format:
+            `作者名字_抖音号_yyyyMMdd_HHmm.ext`
+
+            Multi-image resources append `_01`, `_02`, etc.
+          prerelease: false
+          make_latest: true
+          overwrite_files: true
+          files: |
+            packages/*.deb
+            build-artifacts/DYYY.dylib
