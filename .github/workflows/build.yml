@@ -24,6 +24,7 @@ jobs:
       - name: Apply custom download filename patch
         run: |
           python3 .github/scripts/apply_filename_patch.py .
+          python3 .github/scripts/fix_api_download_rename.py .
           git diff -- DYYYManager.h DYYYManager.m DYYYLongPressPanel.xm
 
       - name: Check cache
@@ -90,6 +91,8 @@ jobs:
 
             Download filename format:
             `作者名字_抖音号_yyyyMMdd_HHmm.ext`
+
+            API downloads freeze the work metadata before requesting the parser API, then rename the completed local temp file before saving it to Photos.
 
             Multi-image resources append `_01`, `_02`, etc.
           prerelease: false
