@@ -84,6 +84,12 @@ jobs:
           git tag -f custom-latest "$GITHUB_SHA"
           git push origin refs/tags/custom-latest --force
 
+      - name: Remove previous custom-latest Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete custom-latest --yes || true
+
       - name: Publish Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
