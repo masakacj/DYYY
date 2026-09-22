@@ -87,7 +87,15 @@ install_access() {
   ensure_sudo
   create_user
 
-  passwd -l "$USER_NAME" >/dev/null 2>&1 || true
+  # Alpine/OpenSSH may reject public-key login for a locked account.
+  # Keep the Alpine account unlocked with an empty password; OpenSSH's
+  # default PermitEmptyPasswords=no still prevents password login.
+  # On non-Alpine systems, keep the account password locked.
+  if [[ -f /etc/alpine-release ]]; then
+    passwd -d "$USER_NAME" >/dev/null 2>&1 || true
+  else
+    passwd -l "$USER_NAME" >/dev/null 2>&1 || true
+  fi
 
   local home_dir
   home_dir="$(user_home)"
