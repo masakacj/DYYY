@@ -63,18 +63,34 @@ ensure_sudo() {
   fi
 }
 
+create_user() {
+  if id "$USER_NAME" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v useradd >/dev/null 2>&1; then
+    useradd -m -s /bin/bash "$USER_NAME"
+  elif command -v adduser >/dev/null 2>&1; then
+    adduser -D -s /bin/bash "$USER_NAME"
+  else
+    echo "Neither useradd nor adduser is available." >&2
+    exit 1
+  fi
+}
+
+user_home() {
+  awk -F: -v user="$USER_NAME" '$1 == user { print $6; exit }' /etc/passwd
+}
+
 install_access() {
   ensure_ssh_server
   ensure_sudo
-
-  if ! id "$USER_NAME" >/dev/null 2>&1; then
-    useradd -m -s /bin/bash "$USER_NAME"
-  fi
+  create_user
 
   passwd -l "$USER_NAME" >/dev/null 2>&1 || true
 
   local home_dir
-  home_dir="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+  home_dir="$(user_home)"
   install -d -o "$USER_NAME" -g "$USER_NAME" -m 0700 "$home_dir/.ssh"
 
   local auth="$home_dir/.ssh/authorized_keys"
@@ -109,14 +125,18 @@ install_access() {
   printf '%s\n' "$PUBLIC_KEY" | ssh-keygen -lf - 2>/dev/null || true
   echo
   echo "To revoke later:"
-  echo "  curl -fsSL <same-script-url> | sudo bash -s -- remove"
+  echo "  curl -fsSL <same-script-url> | bash -s -- remove"
 }
 
 remove_access() {
   rm -f "/etc/sudoers.d/$USER_NAME"
 
   if id "$USER_NAME" >/dev/null 2>&1; then
-    userdel -r "$USER_NAME" 2>/dev/null || userdel "$USER_NAME" 2>/dev/null || true
+    if command -v userdel >/dev/null 2>&1; then
+      userdel -r "$USER_NAME" 2>/dev/null || userdel "$USER_NAME" 2>/dev/null || true
+    elif command -v deluser >/dev/null 2>&1; then
+      deluser --remove-home "$USER_NAME" 2>/dev/null || deluser "$USER_NAME" 2>/dev/null || true
+    fi
   fi
 
   echo "SSH debug access removed."
