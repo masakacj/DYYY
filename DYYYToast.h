@@ -13,6 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (instancetype)initWithFrame:(CGRect)frame;
 - (void)setProgress:(float)progress;
+- (void)setProgress:(float)progress statusText:(nullable NSString *)statusText;
 - (void)show;
 - (void)dismiss;
 - (void)showSuccessAnimation:(void (^)(void))completion;

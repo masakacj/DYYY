@@ -103,10 +103,14 @@
 }
 
 - (void)setProgress:(float)progress {
+    [self setProgress:progress statusText:nil];
+}
+
+- (void)setProgress:(float)progress statusText:(NSString *)statusText {
     // 确保在主线程中更新UI
     if (![NSThread isMainThread]) {
         dispatch_async(dispatch_get_main_queue(), ^{
-          [self setProgress:progress];
+          [self setProgress:progress statusText:statusText];
         });
         return;
     }
@@ -118,7 +122,29 @@
     // 设置环形进度
     _progressLayer.strokeEnd = progress;
 
-    // 更新进度百分比
+    if (statusText.length > 0) {
+        CGFloat containerWidth = 238.0;
+        CGFloat containerHeight = 54.0;
+        self.containerView.bounds = CGRectMake(0, 0, containerWidth, containerHeight);
+        self.containerView.center = CGPointMake(CGRectGetMidX(self.bounds), 137.0);
+        self.containerView.layer.cornerRadius = containerHeight / 2.0;
+        self.blurEffectView.frame = self.containerView.bounds;
+        self.blurEffectView.layer.cornerRadius = containerHeight / 2.0;
+
+        CGFloat circleSize = 30.0;
+        self.progressView.frame = CGRectMake(12.0, (containerHeight - circleSize) / 2.0, circleSize, circleSize);
+        CGFloat progressViewRightEdge = CGRectGetMaxX(self.progressView.frame);
+        self.percentLabel.frame = CGRectMake(progressViewRightEdge + 7.0, 4.0, containerWidth - progressViewRightEdge - 17.0, containerHeight - 8.0);
+        self.percentLabel.numberOfLines = 2;
+        self.percentLabel.font = [UIFont systemFontOfSize:12.0 weight:UIFontWeightMedium];
+        self.percentLabel.textAlignment = NSTextAlignmentLeft;
+        self.percentLabel.adjustsFontSizeToFitWidth = YES;
+        self.percentLabel.minimumScaleFactor = 0.82;
+        self.percentLabel.text = statusText;
+        return;
+    }
+
+    // 保持现有下载进度显示不变
     int percentage = (int)(progress * 100);
     _percentLabel.text = [NSString stringWithFormat:@"下载中... %d%%", percentage];
 }
