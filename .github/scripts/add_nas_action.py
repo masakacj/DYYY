@@ -45,10 +45,7 @@ helper_methods = r'''
         return;
     }
 
-    NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-    configuration.timeoutIntervalForRequest = 15.0;
-    configuration.timeoutIntervalForResource = 20.0;
-    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration];
+    NSURLSession *session = [NSURLSession sharedSession];
 
     NSURLSessionDataTask *task = [session dataTaskWithURL:statusURL
                                        completionHandler:^(NSData *responseData, NSURLResponse *response, NSError *error) {
@@ -176,10 +173,7 @@ nas_action_block = r'''        // DYYY_NAS_PROGRESS_ACTION
                                                                                                         [nasProgressView setProgress:0.0f statusText:@"NAS 准备中…\n正在创建下载任务"];
                                                                                                         [nasProgressView show];
 
-                                                                                                        NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-                                                                                                        configuration.timeoutIntervalForRequest = 20.0;
-                                                                                                        configuration.timeoutIntervalForResource = 30.0;
-                                                                                                        NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration];
+                                                                                                        NSURLSession *session = [NSURLSession sharedSession];
 
                                                                                                         NSURLSessionDataTask *task = [session dataTaskWithURL:nasURL
                                                                                                                                                            completionHandler:^(NSData *responseData, NSURLResponse *response, NSError *error) {
