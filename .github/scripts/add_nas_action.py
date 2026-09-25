@@ -40,15 +40,103 @@ helper_methods = r'''
     return [NSString stringWithFormat:@"%.1f %@", value, units[unitIndex]];
 }
 
++ (void)dyyyStartNasRequestURL:(NSURL *)nasURL progressView:(DYYYToast *)progressView retryCount:(NSInteger)retryCount {
+    if (!nasURL || !progressView) {
+        return;
+    }
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:nasURL
+                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                       timeoutInterval:15.0];
+    request.HTTPMethod = @"GET";
+    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+    [request setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
+
+    NSLog(@"[DYYY][NAS] start request retry=%ld url=%@", (long)retryCount, nasURL.absoluteString);
+
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+                                                               completionHandler:^(NSData *responseData, NSURLResponse *response, NSError *error) {
+                                                                 if (error) {
+                                                                     NSLog(@"[DYYY][NAS] request error retry=%ld error=%@", (long)retryCount, error);
+                                                                     if (retryCount < 2) {
+                                                                         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                                                                           [self dyyyStartNasRequestURL:nasURL progressView:progressView retryCount:retryCount + 1];
+                                                                         });
+                                                                     } else {
+                                                                         dispatch_async(dispatch_get_main_queue(), ^{
+                                                                           [progressView dismiss];
+                                                                           [DYYYUtils showToast:[NSString stringWithFormat:@"NAS请求失败: %@", error.localizedDescription]];
+                                                                         });
+                                                                     }
+                                                                     return;
+                                                                 }
+
+                                                                 NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+                                                                 NSDictionary *responseJSON = responseData.length > 0
+                                                                     ? [NSJSONSerialization JSONObjectWithData:responseData options:0 error:nil]
+                                                                     : nil;
+                                                                 NSDictionary *payload = [responseJSON[@"data"] isKindOfClass:[NSDictionary class]] ? responseJSON[@"data"] : nil;
+                                                                 NSString *message = [responseJSON[@"msg"] isKindOfClass:[NSString class]] ? responseJSON[@"msg"] : @"NAS服务器返回异常";
+                                                                 NSLog(@"[DYYY][NAS] response status=%ld message=%@", (long)httpResponse.statusCode, message);
+
+                                                                 if (httpResponse.statusCode < 200 || httpResponse.statusCode >= 300) {
+                                                                     dispatch_async(dispatch_get_main_queue(), ^{
+                                                                       [progressView dismiss];
+                                                                       [DYYYUtils showToast:[NSString stringWithFormat:@"NAS下载失败: %@", message]];
+                                                                     });
+                                                                     return;
+                                                                 }
+
+                                                                 NSString *statusURLString = [payload[@"status_url_absolute"] isKindOfClass:[NSString class]]
+                                                                     ? payload[@"status_url_absolute"]
+                                                                     : nil;
+                                                                 if (statusURLString.length == 0 && [payload[@"status_url"] isKindOfClass:[NSString class]]) {
+                                                                     statusURLString = payload[@"status_url"];
+                                                                 }
+
+                                                                 NSURL *statusURL = nil;
+                                                                 if (statusURLString.length > 0) {
+                                                                     NSURL *candidate = [NSURL URLWithString:statusURLString];
+                                                                     statusURL = candidate.scheme.length > 0 ? candidate : [[NSURL URLWithString:statusURLString relativeToURL:nasURL] absoluteURL];
+                                                                 }
+                                                                 if (statusURL) {
+                                                                     [self dyyyPollNasStatusURL:statusURL progressView:progressView retryCount:0];
+                                                                     return;
+                                                                 }
+
+                                                                 // 兼容旧版 resolver 的同步返回。
+                                                                 NSInteger responseCode = [responseJSON[@"code"] integerValue];
+                                                                 if (responseCode == 202) {
+                                                                     dispatch_async(dispatch_get_main_queue(), ^{
+                                                                       [progressView dismiss];
+                                                                       [DYYYUtils showToast:@"NAS任务已创建，但服务器未返回状态地址"];
+                                                                     });
+                                                                     return;
+                                                                 }
+
+                                                                 dispatch_async(dispatch_get_main_queue(), ^{
+                                                                   [progressView setProgress:1.0f statusText:message.length > 0 ? message : @"已保存至 NAS"];
+                                                                   progressView.allowSuccessAnimation = YES;
+                                                                   [progressView dismiss];
+                                                                 });
+                                                               }];
+    [task resume];
+}
+
 + (void)dyyyPollNasStatusURL:(NSURL *)statusURL progressView:(DYYYToast *)progressView retryCount:(NSInteger)retryCount {
     if (!statusURL || !progressView) {
         return;
     }
 
-    NSURLSession *session = [NSURLSession sharedSession];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:statusURL
+                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                       timeoutInterval:15.0];
+    request.HTTPMethod = @"GET";
+    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+    [request setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
 
-    NSURLSessionDataTask *task = [session dataTaskWithURL:statusURL
-                                       completionHandler:^(NSData *responseData, NSURLResponse *response, NSError *error) {
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+                                                               completionHandler:^(NSData *responseData, NSURLResponse *response, NSError *error) {
                                          if (error) {
                                              if (retryCount < 8) {
                                                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
@@ -171,52 +259,8 @@ nas_action_block = r'''        // DYYY_NAS_PROGRESS_ACTION
                                                                                                         DYYYToast *nasProgressView = [[DYYYToast alloc] initWithFrame:[UIScreen mainScreen].bounds];
                                                                                                         nasProgressView.userInteractionEnabled = NO;
                                                                                                         [nasProgressView setProgress:0.0f statusText:@"NAS 准备中…\n正在创建下载任务"];
+                                                                                                        [self dyyyStartNasRequestURL:nasURL progressView:nasProgressView retryCount:0];
                                                                                                         [nasProgressView show];
-
-                                                                                                        NSURLSession *session = [NSURLSession sharedSession];
-
-                                                                                                        NSURLSessionDataTask *task = [session dataTaskWithURL:nasURL
-                                                                                                                                                           completionHandler:^(NSData *responseData, NSURLResponse *response, NSError *error) {
-                                                                                                          if (error) {
-                                                                                                              dispatch_async(dispatch_get_main_queue(), ^{
-                                                                                                                [nasProgressView dismiss];
-                                                                                                                [DYYYUtils showToast:[NSString stringWithFormat:@"NAS请求失败: %@", error.localizedDescription]];
-                                                                                                              });
-                                                                                                              return;
-                                                                                                          }
-
-                                                                                                          NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
-                                                                                                          NSDictionary *responseJSON = responseData.length > 0
-                                                                                                              ? [NSJSONSerialization JSONObjectWithData:responseData options:0 error:nil]
-                                                                                                              : nil;
-                                                                                                          NSDictionary *payload = [responseJSON[@"data"] isKindOfClass:[NSDictionary class]] ? responseJSON[@"data"] : nil;
-                                                                                                          NSString *message = [responseJSON[@"msg"] isKindOfClass:[NSString class]] ? responseJSON[@"msg"] : @"NAS服务器返回异常";
-
-                                                                                                          if (httpResponse.statusCode < 200 || httpResponse.statusCode >= 300) {
-                                                                                                              dispatch_async(dispatch_get_main_queue(), ^{
-                                                                                                                [nasProgressView dismiss];
-                                                                                                                [DYYYUtils showToast:[NSString stringWithFormat:@"NAS下载失败: %@", message]];
-                                                                                                              });
-                                                                                                              return;
-                                                                                                          }
-
-                                                                                                          NSString *statusURLString = [payload[@"status_url_absolute"] isKindOfClass:[NSString class]]
-                                                                                                              ? payload[@"status_url_absolute"]
-                                                                                                              : nil;
-                                                                                                          NSURL *statusURL = statusURLString.length > 0 ? [NSURL URLWithString:statusURLString] : nil;
-                                                                                                          if (statusURL) {
-                                                                                                              [self dyyyPollNasStatusURL:statusURL progressView:nasProgressView retryCount:0];
-                                                                                                              return;
-                                                                                                          }
-
-                                                                                                          // 兼容旧版 resolver：如果接口仍是同步返回，则按成功结果收尾。
-                                                                                                          dispatch_async(dispatch_get_main_queue(), ^{
-                                                                                                            [nasProgressView setProgress:1.0f statusText:message.length > 0 ? message : @"已保存至 NAS"];
-                                                                                                            nasProgressView.allowSuccessAnimation = YES;
-                                                                                                            [nasProgressView dismiss];
-                                                                                                          });
-                                                                                                        }];
-                                                                                                        [task resume];
                                                                                                       }];
             [actions addObject:nasDownloadAction];
         }
