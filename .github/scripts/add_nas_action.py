@@ -256,6 +256,28 @@ nas_action_block = r'''        // DYYY_NAS_PROGRESS_ACTION
                                                                                                       handler:^{
                                                                                                         NSURL *nasURL = [NSURL URLWithString:nasURLString];
                                                                                                         NSURL *nasFallbackURL = nasFallbackURLString.length > 0 ? [NSURL URLWithString:nasFallbackURLString] : nil;
+                                                                                                        if (!nasFallbackURL && nasURL) {
+                                                                                                            NSURLComponents *components = [NSURLComponents componentsWithURL:nasURL resolvingAgainstBaseURL:NO];
+                                                                                                            NSString *awemeID = nil;
+                                                                                                            NSString *quality = @"original";
+                                                                                                            for (NSURLQueryItem *item in components.queryItems) {
+                                                                                                                if ([item.name isEqualToString:@"aweme_id"]) {
+                                                                                                                    awemeID = item.value;
+                                                                                                                } else if ([item.name isEqualToString:@"quality"] && item.value.length > 0) {
+                                                                                                                    quality = item.value;
+                                                                                                                }
+                                                                                                            }
+                                                                                                            if (awemeID.length > 0) {
+                                                                                                                components.path = @"/api/resolve";
+                                                                                                                components.queryItems = @[
+                                                                                                                    [NSURLQueryItem queryItemWithName:@"source" value:@"dyyy"],
+                                                                                                                    [NSURLQueryItem queryItemWithName:@"action" value:@"nas"],
+                                                                                                                    [NSURLQueryItem queryItemWithName:@"aweme_id" value:awemeID],
+                                                                                                                    [NSURLQueryItem queryItemWithName:@"quality" value:quality]
+                                                                                                                ];
+                                                                                                                nasFallbackURL = components.URL;
+                                                                                                            }
+                                                                                                        }
                                                                                                         if (!nasURL) {
                                                                                                             [DYYYUtils showToast:@"NAS接口地址无效"];
                                                                                                             return;
