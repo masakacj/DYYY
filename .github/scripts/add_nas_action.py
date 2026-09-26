@@ -40,7 +40,7 @@ helper_methods = r'''
     return [NSString stringWithFormat:@"%.1f %@", value, units[unitIndex]];
 }
 
-+ (void)dyyyStartNasRequestURL:(NSURL *)nasURL progressView:(DYYYToast *)progressView retryCount:(NSInteger)retryCount {
++ (void)dyyyStartNasRequestURL:(NSURL *)nasURL fallbackURL:(NSURL *)fallbackURL progressView:(DYYYToast *)progressView retryCount:(NSInteger)retryCount {
     if (!nasURL || !progressView) {
         return;
     }
@@ -60,8 +60,11 @@ helper_methods = r'''
                                                                      NSLog(@"[DYYY][NAS] request error retry=%ld error=%@", (long)retryCount, error);
                                                                      if (retryCount < 2) {
                                                                          dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-                                                                           [self dyyyStartNasRequestURL:nasURL progressView:progressView retryCount:retryCount + 1];
+                                                                           [self dyyyStartNasRequestURL:nasURL fallbackURL:fallbackURL progressView:progressView retryCount:retryCount + 1];
                                                                          });
+                                                                     } else if (fallbackURL && ![fallbackURL.absoluteString isEqualToString:nasURL.absoluteString]) {
+                                                                         NSLog(@"[DYYY][NAS] primary route failed, falling back to %@", fallbackURL.absoluteString);
+                                                                         [self dyyyStartNasRequestURL:fallbackURL fallbackURL:nil progressView:progressView retryCount:0];
                                                                      } else {
                                                                          dispatch_async(dispatch_get_main_queue(), ^{
                                                                            [progressView dismiss];
@@ -245,12 +248,14 @@ action_insert_point = '''        if (actions.count > 0) {
 '''
 nas_action_block = r'''        // DYYY_NAS_PROGRESS_ACTION
         NSString *nasURLString = [nasAction[@"url"] isKindOfClass:[NSString class]] ? nasAction[@"url"] : nil;
+        NSString *nasFallbackURLString = [nasAction[@"fallback_url"] isKindOfClass:[NSString class]] ? nasAction[@"fallback_url"] : nil;
         if (nasURLString.length > 0) {
             NSString *nasTitle = [nasAction[@"title"] isKindOfClass:[NSString class]] && [nasAction[@"title"] length] > 0 ? nasAction[@"title"] : @"下载至NAS";
             AWEUserSheetAction *nasDownloadAction = [NSClassFromString(@"AWEUserSheetAction") actionWithTitle:nasTitle
                                                                                                       imgName:nil
                                                                                                       handler:^{
                                                                                                         NSURL *nasURL = [NSURL URLWithString:nasURLString];
+                                                                                                        NSURL *nasFallbackURL = nasFallbackURLString.length > 0 ? [NSURL URLWithString:nasFallbackURLString] : nil;
                                                                                                         if (!nasURL) {
                                                                                                             [DYYYUtils showToast:@"NAS接口地址无效"];
                                                                                                             return;
@@ -259,7 +264,7 @@ nas_action_block = r'''        // DYYY_NAS_PROGRESS_ACTION
                                                                                                         DYYYToast *nasProgressView = [[DYYYToast alloc] initWithFrame:[UIScreen mainScreen].bounds];
                                                                                                         nasProgressView.userInteractionEnabled = NO;
                                                                                                         [nasProgressView setProgress:0.0f statusText:@"NAS 准备中…\n正在创建下载任务"];
-                                                                                                        [self dyyyStartNasRequestURL:nasURL progressView:nasProgressView retryCount:0];
+                                                                                                        [self dyyyStartNasRequestURL:nasURL fallbackURL:nasFallbackURL progressView:nasProgressView retryCount:0];
                                                                                                         [nasProgressView show];
                                                                                                       }];
             [actions addObject:nasDownloadAction];
