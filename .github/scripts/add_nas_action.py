@@ -14,13 +14,13 @@ signature = '+ (void)handleVideoData:(NSDictionary *)dataDict downloadStem:(NSSt
 if signature not in text:
     raise RuntimeError("Expected patched handleVideoData:downloadStem: signature; run bind_api_quality_context.py first")
 
-marker = "// DYYY_NATIVE_NAS_POST_SUPPORTED"
+marker = "// DYYY_NATIVE_NAS_V4_SUPPORTED"
 if marker in text:
-    print("DYYY native NAS POST support already applied")
+    print("DYYY native NAS v4 support already applied")
     raise SystemExit(0)
 
 helpers = r'''
-// DYYY_NATIVE_NAS_POST_SUPPORTED
+// DYYY_NATIVE_NAS_V4_SUPPORTED
 + (NSString *)dyyyNasFormatBytes:(double)bytes {
     if (bytes <= 0) {
         return @"0 B";
@@ -60,21 +60,18 @@ helpers = r'''
     }
 
     // NAS action 不经过抖音的 NSURLSession 路径。
-    // 在后台直接使用 CFNetwork/NSURLConnection 发送同域名请求，避免第二个 NSURLSession task 被宿主环境卡住。
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-      NSURLResponse *response = nil;
-      NSError *error = nil;
+    // 直接使用 NSURLConnection 异步 GET，同域名、同 /api/resolve 路径，点击时立即启动请求。
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-      NSData *data = [NSURLConnection sendSynchronousRequest:request
-                                           returningResponse:&response
-                                                       error:&error];
-#pragma clang diagnostic pop
+    [NSURLConnection sendAsynchronousRequest:request
+                                       queue:[NSOperationQueue mainQueue]
+                           completionHandler:^(NSURLResponse *response, NSData *data, NSError *error) {
       NSDictionary *json = [self dyyyNasJSONObjectFromData:data];
       if (completion) {
           completion(json, (NSHTTPURLResponse *)response, error);
       }
-    });
+    }];
+#pragma clang diagnostic pop
 }
 
 + (NSMutableURLRequest *)dyyyNasStartRequestForAction:(NSDictionary *)nasAction requestID:(NSString **)requestIDOut {
@@ -95,20 +92,8 @@ helpers = r'''
         ? nasAction[@"quality"]
         : @"original";
 
-    NSDictionary *body = @{
-        @"source" : @"dyyy",
-        @"action" : @"nas",
-        @"aweme_id" : awemeID,
-        @"quality" : quality
-    };
-
-    NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
-    if (!bodyData) {
-        return nil;
-    }
-
-    NSURL *url = [NSURL URLWithString:endpoint];
-    if (!url) {
+    NSURLComponents *components = [NSURLComponents componentsWithString:endpoint];
+    if (!components) {
         return nil;
     }
 
@@ -117,12 +102,23 @@ helpers = r'''
         *requestIDOut = requestID;
     }
 
+    NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray arrayWithArray:components.queryItems ?: @[]];
+    [items addObject:[NSURLQueryItem queryItemWithName:@"source" value:@"dyyy"]];
+    [items addObject:[NSURLQueryItem queryItemWithName:@"action" value:@"nas"]];
+    [items addObject:[NSURLQueryItem queryItemWithName:@"aweme_id" value:awemeID]];
+    [items addObject:[NSURLQueryItem queryItemWithName:@"quality" value:quality]];
+    [items addObject:[NSURLQueryItem queryItemWithName:@"rid" value:requestID]];
+    components.queryItems = items;
+
+    NSURL *url = components.URL;
+    if (!url) {
+        return nil;
+    }
+
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
                                                            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
                                                        timeoutInterval:10.0];
-    request.HTTPMethod = @"POST";
-    request.HTTPBody = bodyData;
-    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    request.HTTPMethod = @"GET";
     [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
     [request setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
     [request setValue:requestID forHTTPHeaderField:@"X-DYYY-Request-ID"];
@@ -258,6 +254,8 @@ helpers = r'''
         return;
     }
 
+    NSString *shortRequestID = requestID.length > 8 ? [requestID substringFromIndex:requestID.length - 8] : requestID;
+    [progressView setProgress:0.0f statusText:[NSString stringWithFormat:@"NAS v4 请求已触发\nID %@", shortRequestID ?: @"-"]];
     NSLog(@"[DYYY][NAS] start request_id=%@ endpoint=%@", requestID, request.URL.absoluteString);
 
     [self dyyyNasSendRequest:request
@@ -326,17 +324,18 @@ action_insert_point = '''        if (actions.count > 0) {
 '''
 nas_action_block = r'''        NSString *nasActionName = [nasAction[@"action"] isKindOfClass:[NSString class]] ? nasAction[@"action"] : nil;
         if ([nasActionName isEqualToString:@"nas"]) {
-            NSString *nasTitle = [nasAction[@"title"] isKindOfClass:[NSString class]] && [nasAction[@"title"] length] > 0
+            NSString *nasBaseTitle = [nasAction[@"title"] isKindOfClass:[NSString class]] && [nasAction[@"title"] length] > 0
                 ? nasAction[@"title"]
                 : @"下载原画至NAS";
+            NSString *nasTitle = [NSString stringWithFormat:@"%@ · v4", nasBaseTitle];
             AWEUserSheetAction *nasDownloadAction = [NSClassFromString(@"AWEUserSheetAction") actionWithTitle:nasTitle
                                                                                                       imgName:nil
                                                                                                       handler:^{
                                                                                                         DYYYToast *nasProgressView = [[DYYYToast alloc] initWithFrame:[UIScreen mainScreen].bounds];
                                                                                                         nasProgressView.userInteractionEnabled = NO;
-                                                                                                        [nasProgressView setProgress:0.0f statusText:@"NAS 准备中…\n正在创建任务"];
-                                                                                                        [nasProgressView show];
+                                                                                                        [nasProgressView setProgress:0.0f statusText:@"NAS v4 准备中…\n正在生成请求 ID"];
                                                                                                         [self dyyyStartNasAction:nasAction progressView:nasProgressView];
+                                                                                                        [nasProgressView show];
                                                                                                       }];
             [actions addObject:nasDownloadAction];
         }
