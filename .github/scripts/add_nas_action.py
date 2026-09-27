@@ -48,13 +48,8 @@ helper_methods = r'''
         return;
     }
 
-    // NAS action 使用独立短生命周期 Session。
-    // 仍然访问与解析接口相同的域名，但不复用抖音进程 sharedSession 的连接池。
-    NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-    configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
-    configuration.timeoutIntervalForRequest = 15.0;
-    configuration.timeoutIntervalForResource = 20.0;
-
+    // NAS action 与已经验证可用的 API 解析请求保持同一网络实现：
+    // 使用 NSURLSession.sharedSession，仅由 NSURLRequest 控制禁缓存与超时。
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
                                                            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
                                                        timeoutInterval:15.0];
@@ -62,7 +57,7 @@ helper_methods = r'''
     [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
     [request setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
 
-    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration];
+    NSURLSession *session = [NSURLSession sharedSession];
     NSURLSessionDataTask *task = [session dataTaskWithRequest:request
                                            completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
                                              NSDictionary *json = nil;
@@ -72,7 +67,6 @@ helper_methods = r'''
                                              if (completion) {
                                                  completion(json, (NSHTTPURLResponse *)response, error);
                                              }
-                                             [session finishTasksAndInvalidate];
                                            }];
     [task resume];
 }
