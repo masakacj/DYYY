@@ -14,18 +14,15 @@ signature = '+ (void)handleVideoData:(NSDictionary *)dataDict downloadStem:(NSSt
 if signature not in text:
     raise RuntimeError("Expected patched handleVideoData:downloadStem: signature; run bind_api_quality_context.py first")
 
-marker = "// DYYY_NATIVE_NAS_V4_SUPPORTED"
+marker = "// DYYY_REMOTE_ACTION_RUNTIME_SUPPORTED"
 if marker in text:
-    print("DYYY native NAS v4 support already applied")
+    print("DYYY remote action runtime already applied")
     raise SystemExit(0)
 
 helpers = r'''
-// DYYY_NATIVE_NAS_V4_SUPPORTED
-+ (NSString *)dyyyNasFormatBytes:(double)bytes {
-    if (bytes <= 0) {
-        return @"0 B";
-    }
-
+// DYYY_REMOTE_ACTION_RUNTIME_SUPPORTED
++ (NSString *)dyyyRuntimeFormatBytes:(double)bytes {
+    if (bytes <= 0) return @"0 B";
     NSArray<NSString *> *units = @[@"B", @"KB", @"MB", @"GB"];
     double value = bytes;
     NSUInteger unitIndex = 0;
@@ -33,134 +30,133 @@ helpers = r'''
         value /= 1024.0;
         unitIndex += 1;
     }
-
-    if (unitIndex == 0) {
-        return [NSString stringWithFormat:@"%.0f %@", value, units[unitIndex]];
-    }
-    return [NSString stringWithFormat:@"%.1f %@", value, units[unitIndex]];
+    return unitIndex == 0
+        ? [NSString stringWithFormat:@"%.0f %@", value, units[unitIndex]]
+        : [NSString stringWithFormat:@"%.1f %@", value, units[unitIndex]];
 }
 
-+ (NSDictionary *)dyyyNasJSONObjectFromData:(NSData *)data {
-    if (data.length == 0) {
-        return nil;
-    }
++ (NSDictionary *)dyyyRuntimeJSONObjectFromData:(NSData *)data {
+    if (data.length == 0) return nil;
     id object = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
     return [object isKindOfClass:[NSDictionary class]] ? object : nil;
 }
 
-+ (void)dyyyNasSendRequest:(NSURLRequest *)request
-                completion:(void (^)(NSDictionary *json, NSHTTPURLResponse *response, NSError *error))completion {
++ (void)dyyyRuntimeSendRequest:(NSURLRequest *)request
+                     transport:(NSString *)transport
+                    completion:(void (^)(NSDictionary *json, NSHTTPURLResponse *response, NSError *error))completion {
     if (!request.URL) {
         if (completion) {
-            completion(nil, nil, [NSError errorWithDomain:@"DYYY.NAS"
+            completion(nil, nil, [NSError errorWithDomain:@"DYYY.Runtime"
                                                       code:-1
-                                                  userInfo:@{NSLocalizedDescriptionKey : @"NAS接口地址无效"}]);
+                                                  userInfo:@{NSLocalizedDescriptionKey : @"远程动作地址无效"}]);
         }
         return;
     }
 
-    // NAS action 不经过抖音的 NSURLSession 路径。
-    // 直接使用 NSURLConnection 异步 GET，同域名、同 /api/resolve 路径，点击时立即启动请求。
+    NSString *mode = [transport lowercaseString];
+    if ([mode isEqualToString:@"nsurlsession"]) {
+        NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+                                                                    completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+          if (completion) {
+              completion([self dyyyRuntimeJSONObjectFromData:data], (NSHTTPURLResponse *)response, error);
+          }
+        }];
+        [task resume];
+        return;
+    }
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [NSURLConnection sendAsynchronousRequest:request
                                        queue:[NSOperationQueue mainQueue]
                            completionHandler:^(NSURLResponse *response, NSData *data, NSError *error) {
-      NSDictionary *json = [self dyyyNasJSONObjectFromData:data];
       if (completion) {
-          completion(json, (NSHTTPURLResponse *)response, error);
+          completion([self dyyyRuntimeJSONObjectFromData:data], (NSHTTPURLResponse *)response, error);
       }
     }];
 #pragma clang diagnostic pop
 }
 
-+ (NSMutableURLRequest *)dyyyNasStartRequestForAction:(NSDictionary *)nasAction requestID:(NSString **)requestIDOut {
-    NSString *endpoint = [nasAction[@"endpoint"] isKindOfClass:[NSString class]] ? nasAction[@"endpoint"] : nil;
-    NSString *awemeID = nil;
-    id awemeValue = nasAction[@"aweme_id"];
-    if ([awemeValue isKindOfClass:[NSString class]]) {
-        awemeID = awemeValue;
-    } else if ([awemeValue respondsToSelector:@selector(stringValue)]) {
-        awemeID = [awemeValue stringValue];
++ (NSMutableURLRequest *)dyyyRuntimeRequestFromSpec:(NSDictionary *)spec
+                                          requestID:(NSString *)requestID
+                                        urlOverride:(NSURL *)urlOverride {
+    if (![spec isKindOfClass:[NSDictionary class]]) return nil;
+
+    NSString *urlString = [spec[@"url"] isKindOfClass:[NSString class]] ? spec[@"url"] : nil;
+    NSURL *url = urlOverride ?: (urlString.length > 0 ? [NSURL URLWithString:urlString] : nil);
+    if (!url) return nil;
+
+    NSString *ridQuery = [spec[@"request_id_query"] isKindOfClass:[NSString class]] ? spec[@"request_id_query"] : nil;
+    if (requestID.length > 0 && ridQuery.length > 0) {
+        NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+        if (components) {
+            NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray arrayWithArray:components.queryItems ?: @[]];
+            [items addObject:[NSURLQueryItem queryItemWithName:ridQuery value:requestID]];
+            components.queryItems = items;
+            if (components.URL) url = components.URL;
+        }
     }
 
-    if (endpoint.length == 0 || awemeID.length == 0) {
-        return nil;
-    }
-
-    NSString *quality = [nasAction[@"quality"] isKindOfClass:[NSString class]] && [nasAction[@"quality"] length] > 0
-        ? nasAction[@"quality"]
-        : @"original";
-
-    NSURLComponents *components = [NSURLComponents componentsWithString:endpoint];
-    if (!components) {
-        return nil;
-    }
-
-    NSString *requestID = [NSUUID UUID].UUIDString;
-    if (requestIDOut) {
-        *requestIDOut = requestID;
-    }
-
-    NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray arrayWithArray:components.queryItems ?: @[]];
-    [items addObject:[NSURLQueryItem queryItemWithName:@"source" value:@"dyyy"]];
-    [items addObject:[NSURLQueryItem queryItemWithName:@"action" value:@"nas"]];
-    [items addObject:[NSURLQueryItem queryItemWithName:@"aweme_id" value:awemeID]];
-    [items addObject:[NSURLQueryItem queryItemWithName:@"quality" value:quality]];
-    [items addObject:[NSURLQueryItem queryItemWithName:@"rid" value:requestID]];
-    components.queryItems = items;
-
-    NSURL *url = components.URL;
-    if (!url) {
-        return nil;
-    }
+    NSTimeInterval timeout = [spec[@"timeout_ms"] doubleValue] / 1000.0;
+    if (timeout <= 0) timeout = 10.0;
 
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
                                                            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
-                                                       timeoutInterval:10.0];
-    request.HTTPMethod = @"GET";
-    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
-    [request setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
-    [request setValue:requestID forHTTPHeaderField:@"X-DYYY-Request-ID"];
+                                                       timeoutInterval:timeout];
+
+    NSString *method = [spec[@"method"] isKindOfClass:[NSString class]] ? [spec[@"method"] uppercaseString] : @"GET";
+    request.HTTPMethod = [method isEqualToString:@"POST"] ? @"POST" : @"GET";
+
+    NSDictionary *headers = [spec[@"headers"] isKindOfClass:[NSDictionary class]] ? spec[@"headers"] : nil;
+    for (id key in headers) {
+        id value = headers[key];
+        if ([key isKindOfClass:[NSString class]] && [value isKindOfClass:[NSString class]]) {
+            [request setValue:value forHTTPHeaderField:key];
+        }
+    }
+
+    NSString *ridHeader = [spec[@"request_id_header"] isKindOfClass:[NSString class]] ? spec[@"request_id_header"] : nil;
+    if (requestID.length > 0 && ridHeader.length > 0) {
+        [request setValue:requestID forHTTPHeaderField:ridHeader];
+    }
+
+    NSDictionary *body = [spec[@"body"] isKindOfClass:[NSDictionary class]] ? spec[@"body"] : nil;
+    if ([request.HTTPMethod isEqualToString:@"POST"] && body) {
+        NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+        if (bodyData) {
+            request.HTTPBody = bodyData;
+            if (![request valueForHTTPHeaderField:@"Content-Type"]) {
+                [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+            }
+        }
+    }
+
     return request;
 }
 
-+ (NSMutableURLRequest *)dyyyNasStatusRequestForURL:(NSURL *)statusURL requestID:(NSString *)requestID {
-    if (!statusURL) {
-        return nil;
-    }
++ (void)dyyyRuntimePollStatusURL:(NSURL *)statusURL
+                         pollSpec:(NSDictionary *)pollSpec
+                        requestID:(NSString *)requestID
+                     progressView:(DYYYToast *)progressView
+                       retryCount:(NSInteger)retryCount {
+    if (!statusURL || ![pollSpec isKindOfClass:[NSDictionary class]] || !progressView) return;
 
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:statusURL
-                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
-                                                       timeoutInterval:10.0];
-    request.HTTPMethod = @"GET";
-    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
-    [request setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
-    if (requestID.length > 0) {
-        [request setValue:requestID forHTTPHeaderField:@"X-DYYY-Request-ID"];
-    }
-    return request;
-}
+    NSMutableURLRequest *request = [self dyyyRuntimeRequestFromSpec:pollSpec requestID:requestID urlOverride:statusURL];
+    if (!request) return;
 
-+ (void)dyyyPollNasStatusURL:(NSURL *)statusURL
-                   requestID:(NSString *)requestID
-                progressView:(DYYYToast *)progressView
-                  retryCount:(NSInteger)retryCount {
-    NSMutableURLRequest *request = [self dyyyNasStatusRequestForURL:statusURL requestID:requestID];
-    if (!request || !progressView) {
-        return;
-    }
-
-    [self dyyyNasSendRequest:request
-                  completion:^(NSDictionary *json, NSHTTPURLResponse *response, NSError *error) {
+    NSString *transport = [pollSpec[@"transport"] isKindOfClass:[NSString class]] ? pollSpec[@"transport"] : @"nsurlconnection";
+    [self dyyyRuntimeSendRequest:request transport:transport completion:^(NSDictionary *json, NSHTTPURLResponse *response, NSError *error) {
       if (error) {
           if (retryCount < 8) {
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+              double interval = [pollSpec[@"interval_ms"] doubleValue] / 1000.0;
+              if (interval <= 0) interval = 0.75;
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
                              dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-                [self dyyyPollNasStatusURL:statusURL
-                                 requestID:requestID
-                              progressView:progressView
-                                retryCount:retryCount + 1];
+                [self dyyyRuntimePollStatusURL:statusURL
+                                      pollSpec:pollSpec
+                                     requestID:requestID
+                                  progressView:progressView
+                                    retryCount:retryCount + 1];
               });
           } else {
               dispatch_async(dispatch_get_main_queue(), ^{
@@ -186,9 +182,7 @@ helpers = r'''
       double total = [payload[@"total_bytes"] doubleValue];
       double speed = [payload[@"speed_bps"] doubleValue];
       float progress = [payload[@"progress"] floatValue];
-      if (total > 0) {
-          progress = (float)MIN(1.0, downloaded / total);
-      }
+      if (total > 0) progress = (float)MIN(1.0, downloaded / total);
 
       if ([state isEqualToString:@"completed"]) {
           NSString *filename = [payload[@"filename"] isKindOfClass:[NSString class]] ? payload[@"filename"] : @"";
@@ -205,9 +199,7 @@ helpers = r'''
 
       if ([state isEqualToString:@"failed"] || [state isEqualToString:@"cancelled"]) {
           NSString *serverError = [payload[@"error"] isKindOfClass:[NSString class]] ? payload[@"error"] : nil;
-          NSString *message = serverError.length > 0
-              ? serverError
-              : ([state isEqualToString:@"cancelled"] ? @"任务已取消" : @"未知错误");
+          NSString *message = serverError.length > 0 ? serverError : @"任务失败";
           dispatch_async(dispatch_get_main_queue(), ^{
             [progressView dismiss];
             [DYYYUtils showToast:[NSString stringWithFormat:@"NAS下载失败: %@", message]];
@@ -217,49 +209,62 @@ helpers = r'''
 
       NSString *statusText = nil;
       if ([state isEqualToString:@"preparing"]) {
-          statusText = @"NAS 准备中…\n等待服务器创建任务";
+          statusText = @"NAS 准备中…\n服务器正在准备下载";
       } else if (total > 0) {
           NSInteger percentage = (NSInteger)lrintf(progress * 100.0f);
           statusText = [NSString stringWithFormat:@"NAS %ld%% · %@/s\n%@ / %@",
                         (long)percentage,
-                        [self dyyyNasFormatBytes:speed],
-                        [self dyyyNasFormatBytes:downloaded],
-                        [self dyyyNasFormatBytes:total]];
+                        [self dyyyRuntimeFormatBytes:speed],
+                        [self dyyyRuntimeFormatBytes:downloaded],
+                        [self dyyyRuntimeFormatBytes:total]];
       } else {
           statusText = [NSString stringWithFormat:@"NAS 下载中 · %@/s\n已下载 %@",
-                        [self dyyyNasFormatBytes:speed],
-                        [self dyyyNasFormatBytes:downloaded]];
+                        [self dyyyRuntimeFormatBytes:speed],
+                        [self dyyyRuntimeFormatBytes:downloaded]];
       }
 
       dispatch_async(dispatch_get_main_queue(), ^{
         [progressView setProgress:progress statusText:statusText];
       });
 
-      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.75 * NSEC_PER_SEC)),
+      double interval = [pollSpec[@"interval_ms"] doubleValue] / 1000.0;
+      if (interval <= 0) interval = 0.75;
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
                      dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        [self dyyyPollNasStatusURL:statusURL
-                         requestID:requestID
-                      progressView:progressView
-                        retryCount:0];
+        [self dyyyRuntimePollStatusURL:statusURL
+                              pollSpec:pollSpec
+                             requestID:requestID
+                          progressView:progressView
+                            retryCount:0];
       });
     }];
 }
 
-+ (void)dyyyStartNasAction:(NSDictionary *)nasAction progressView:(DYYYToast *)progressView {
-    NSString *requestID = nil;
-    NSMutableURLRequest *request = [self dyyyNasStartRequestForAction:nasAction requestID:&requestID];
-    if (!request) {
++ (void)dyyyExecuteRuntimeAction:(NSDictionary *)runtimeAction progressView:(DYYYToast *)progressView {
+    NSDictionary *requestSpec = [runtimeAction[@"request"] isKindOfClass:[NSDictionary class]] ? runtimeAction[@"request"] : nil;
+    NSDictionary *pollSpec = [runtimeAction[@"poll"] isKindOfClass:[NSDictionary class]] ? runtimeAction[@"poll"] : nil;
+    if (!requestSpec || !pollSpec) {
         [progressView dismiss];
-        [DYYYUtils showToast:@"NAS action 参数无效"];
+        [DYYYUtils showToast:@"远程动作配置不完整"];
         return;
     }
 
-    NSString *shortRequestID = requestID.length > 8 ? [requestID substringFromIndex:requestID.length - 8] : requestID;
-    [progressView setProgress:0.0f statusText:[NSString stringWithFormat:@"NAS v4 请求已触发\nID %@", shortRequestID ?: @"-"]];
-    NSLog(@"[DYYY][NAS] start request_id=%@ endpoint=%@", requestID, request.URL.absoluteString);
+    NSString *requestID = [NSUUID UUID].UUIDString;
+    NSString *shortID = requestID.length > 8 ? [requestID substringFromIndex:requestID.length - 8] : requestID;
+    NSString *version = [runtimeAction[@"runtime_version"] isKindOfClass:[NSString class]] ? runtimeAction[@"runtime_version"] : @"runtime";
+    [progressView setProgress:0.0f statusText:[NSString stringWithFormat:@"%@\n请求 ID %@", version, shortID ?: @"-"]];
 
-    [self dyyyNasSendRequest:request
-                  completion:^(NSDictionary *json, NSHTTPURLResponse *response, NSError *error) {
+    NSMutableURLRequest *request = [self dyyyRuntimeRequestFromSpec:requestSpec requestID:requestID urlOverride:nil];
+    if (!request) {
+        [progressView dismiss];
+        [DYYYUtils showToast:@"无法构造远程动作请求"];
+        return;
+    }
+
+    NSString *transport = [requestSpec[@"transport"] isKindOfClass:[NSString class]] ? requestSpec[@"transport"] : @"nsurlconnection";
+    NSLog(@"[DYYY][Runtime] version=%@ transport=%@ request_id=%@ url=%@", version, transport, requestID, request.URL.absoluteString);
+
+    [self dyyyRuntimeSendRequest:request transport:transport completion:^(NSDictionary *json, NSHTTPURLResponse *response, NSError *error) {
       if (error) {
           dispatch_async(dispatch_get_main_queue(), ^{
             [progressView dismiss];
@@ -278,29 +283,68 @@ helpers = r'''
           return;
       }
 
-      NSString *statusURLString = [payload[@"status_url_absolute"] isKindOfClass:[NSString class]]
-          ? payload[@"status_url_absolute"]
-          : nil;
+      NSString *statusURLString = [payload[@"status_url_absolute"] isKindOfClass:[NSString class]] ? payload[@"status_url_absolute"] : nil;
       NSURL *statusURL = statusURLString.length > 0 ? [NSURL URLWithString:statusURLString] : nil;
       if (!statusURL) {
           NSString *statusPath = [payload[@"status_url"] isKindOfClass:[NSString class]] ? payload[@"status_url"] : nil;
-          statusURL = statusPath.length > 0
-              ? [[NSURL URLWithString:statusPath relativeToURL:request.URL] absoluteURL]
-              : nil;
+          statusURL = statusPath.length > 0 ? [[NSURL URLWithString:statusPath relativeToURL:request.URL] absoluteURL] : nil;
       }
 
       if (!statusURL) {
           dispatch_async(dispatch_get_main_queue(), ^{
             [progressView dismiss];
-            [DYYYUtils showToast:@"NAS任务已创建，但缺少状态地址"];
+            [DYYYUtils showToast:@"任务已创建，但服务器未返回状态地址"];
           });
           return;
       }
 
-      [self dyyyPollNasStatusURL:statusURL
-                       requestID:requestID
-                    progressView:progressView
-                      retryCount:0];
+      [self dyyyRuntimePollStatusURL:statusURL
+                            pollSpec:pollSpec
+                           requestID:requestID
+                        progressView:progressView
+                          retryCount:0];
+    }];
+}
+
++ (void)dyyyStartRemoteAction:(NSDictionary *)action progressView:(DYYYToast *)progressView {
+    NSString *runtimeURLString = [action[@"runtime_url"] isKindOfClass:[NSString class]] ? action[@"runtime_url"] : nil;
+    NSURL *runtimeURL = runtimeURLString.length > 0 ? [NSURL URLWithString:runtimeURLString] : nil;
+    if (!runtimeURL) {
+        [progressView dismiss];
+        [DYYYUtils showToast:@"该服务器未提供热更动作地址"];
+        return;
+    }
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:runtimeURL
+                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                       timeoutInterval:10.0];
+    request.HTTPMethod = @"GET";
+    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+    [request setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
+
+    [progressView setProgress:0.0f statusText:@"正在读取热更配置…"];
+
+    // Bootstrap 固定使用 NSURLConnection；真正动作的 transport 由服务端 runtime JSON 决定。
+    [self dyyyRuntimeSendRequest:request transport:@"nsurlconnection" completion:^(NSDictionary *json, NSHTTPURLResponse *response, NSError *error) {
+      if (error) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [progressView dismiss];
+            [DYYYUtils showToast:[NSString stringWithFormat:@"热更配置读取失败: %@", error.localizedDescription]];
+          });
+          return;
+      }
+
+      NSDictionary *runtimeAction = [json[@"data"] isKindOfClass:[NSDictionary class]] ? json[@"data"] : nil;
+      if (response.statusCode < 200 || response.statusCode >= 300 || !runtimeAction) {
+          NSString *message = [json[@"msg"] isKindOfClass:[NSString class]] ? json[@"msg"] : @"runtime 配置无效";
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [progressView dismiss];
+            [DYYYUtils showToast:message];
+          });
+          return;
+      }
+
+      [self dyyyExecuteRuntimeAction:runtimeAction progressView:progressView];
     }];
 }
 '''
@@ -322,19 +366,21 @@ action_insert_point = '''        if (actions.count > 0) {
             return;
         }
 '''
-nas_action_block = r'''        NSString *nasActionName = [nasAction[@"action"] isKindOfClass:[NSString class]] ? nasAction[@"action"] : nil;
-        if ([nasActionName isEqualToString:@"nas"]) {
+nas_action_block = r'''        NSString *runtimeURL = [nasAction[@"runtime_url"] isKindOfClass:[NSString class]] ? nasAction[@"runtime_url"] : nil;
+        if (runtimeURL.length > 0) {
             NSString *nasBaseTitle = [nasAction[@"title"] isKindOfClass:[NSString class]] && [nasAction[@"title"] length] > 0
                 ? nasAction[@"title"]
                 : @"下载原画至NAS";
-            NSString *nasTitle = [NSString stringWithFormat:@"%@ · v4", nasBaseTitle];
+            NSString *runtimeVersion = [nasAction[@"runtime_version"] isKindOfClass:[NSString class]] ? nasAction[@"runtime_version"] : @"hot";
+            NSString *nasTitle = [NSString stringWithFormat:@"%@ · %@", nasBaseTitle, runtimeVersion];
+
             AWEUserSheetAction *nasDownloadAction = [NSClassFromString(@"AWEUserSheetAction") actionWithTitle:nasTitle
                                                                                                       imgName:nil
                                                                                                       handler:^{
                                                                                                         DYYYToast *nasProgressView = [[DYYYToast alloc] initWithFrame:[UIScreen mainScreen].bounds];
                                                                                                         nasProgressView.userInteractionEnabled = NO;
-                                                                                                        [nasProgressView setProgress:0.0f statusText:@"NAS v4 准备中…\n正在生成请求 ID"];
-                                                                                                        [self dyyyStartNasAction:nasAction progressView:nasProgressView];
+                                                                                                        [nasProgressView setProgress:0.0f statusText:@"正在读取 NAS 热更配置…"];
+                                                                                                        [self dyyyStartRemoteAction:nasAction progressView:nasProgressView];
                                                                                                         [nasProgressView show];
                                                                                                       }];
             [actions addObject:nasDownloadAction];
@@ -351,4 +397,4 @@ if action_insert_point not in text:
 text = text.replace(action_insert_point, nas_action_block, 1)
 
 manager.write_text(text, encoding="utf-8")
-print("Added native DYYY NAS POST action support")
+print("Added DYYY server-driven remote action runtime")
