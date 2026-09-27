@@ -307,11 +307,19 @@ helpers = r'''
 }
 
 + (void)dyyyStartRemoteAction:(NSDictionary *)action progressView:(DYYYToast *)progressView {
+    NSDictionary *embeddedRuntime = [action[@"runtime"] isKindOfClass:[NSDictionary class]] ? action[@"runtime"] : nil;
+    if (embeddedRuntime) {
+        [progressView setProgress:0.0f statusText:@"使用当前解析返回的热更配置…"];
+        [self dyyyExecuteRuntimeAction:embeddedRuntime progressView:progressView];
+        return;
+    }
+
+    // 兼容旧 resolver：没有内嵌 runtime 时才额外获取一次配置。
     NSString *runtimeURLString = [action[@"runtime_url"] isKindOfClass:[NSString class]] ? action[@"runtime_url"] : nil;
     NSURL *runtimeURL = runtimeURLString.length > 0 ? [NSURL URLWithString:runtimeURLString] : nil;
     if (!runtimeURL) {
         [progressView dismiss];
-        [DYYYUtils showToast:@"该服务器未提供热更动作地址"];
+        [DYYYUtils showToast:@"该服务器未提供热更动作配置"];
         return;
     }
 
@@ -322,10 +330,9 @@ helpers = r'''
     [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
     [request setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
 
-    [progressView setProgress:0.0f statusText:@"正在读取热更配置…"];
+    [progressView setProgress:0.0f statusText:@"正在读取兼容热更配置…"];
 
-    // Bootstrap 固定使用 NSURLConnection；真正动作的 transport 由服务端 runtime JSON 决定。
-    [self dyyyRuntimeSendRequest:request transport:@"nsurlconnection" completion:^(NSDictionary *json, NSHTTPURLResponse *response, NSError *error) {
+    [self dyyyRuntimeSendRequest:request transport:@"nsurlsession" completion:^(NSDictionary *json, NSHTTPURLResponse *response, NSError *error) {
       if (error) {
           dispatch_async(dispatch_get_main_queue(), ^{
             [progressView dismiss];
@@ -366,8 +373,9 @@ action_insert_point = '''        if (actions.count > 0) {
             return;
         }
 '''
-nas_action_block = r'''        NSString *runtimeURL = [nasAction[@"runtime_url"] isKindOfClass:[NSString class]] ? nasAction[@"runtime_url"] : nil;
-        if (runtimeURL.length > 0) {
+nas_action_block = r'''        NSDictionary *embeddedRuntime = [nasAction[@"runtime"] isKindOfClass:[NSDictionary class]] ? nasAction[@"runtime"] : nil;
+        NSString *runtimeURL = [nasAction[@"runtime_url"] isKindOfClass:[NSString class]] ? nasAction[@"runtime_url"] : nil;
+        if (embeddedRuntime || runtimeURL.length > 0) {
             NSString *nasBaseTitle = [nasAction[@"title"] isKindOfClass:[NSString class]] && [nasAction[@"title"] length] > 0
                 ? nasAction[@"title"]
                 : @"下载原画至NAS";
@@ -379,7 +387,7 @@ nas_action_block = r'''        NSString *runtimeURL = [nasAction[@"runtime_url"]
                                                                                                       handler:^{
                                                                                                         DYYYToast *nasProgressView = [[DYYYToast alloc] initWithFrame:[UIScreen mainScreen].bounds];
                                                                                                         nasProgressView.userInteractionEnabled = NO;
-                                                                                                        [nasProgressView setProgress:0.0f statusText:@"正在读取 NAS 热更配置…"];
+                                                                                                        [nasProgressView setProgress:0.0f statusText:@"NAS 热更动作准备中…"];
                                                                                                         [self dyyyStartRemoteAction:nasAction progressView:nasProgressView];
                                                                                                         [nasProgressView show];
                                                                                                       }];
