@@ -358,51 +358,62 @@ helpers = r'''
 
 text = text.replace(signature, helpers + "\n" + signature, 1)
 
-video_list_decl = '''    NSArray *videoList = dataDict[@"video_list"];
-'''
-video_list_new = '''    NSArray *videoList = dataDict[@"video_list"];
-    NSDictionary *nasAction = [dataDict[@"nas_action"] isKindOfClass:[NSDictionary class]] ? dataDict[@"nas_action"] : nil;
-'''
-if video_list_decl not in text:
-    raise RuntimeError("video_list declaration patch point not found")
-text = text.replace(video_list_decl, video_list_new, 1)
+download_signature = '+ (void)downloadMedia:(NSURL *)url mediaType:(MediaType)mediaType audio:(NSURL *)audioURL completion:(void (^)(BOOL success))completion {'
+if download_signature not in text:
+    raise RuntimeError("downloadMedia signature patch point not found")
 
-action_insert_point = '''        if (actions.count > 0) {
-            [actionSheet setActions:actions];
-            [actionSheet show];
+runtime_media_hook = r'''+ (void)downloadMedia:(NSURL *)url mediaType:(MediaType)mediaType audio:(NSURL *)audioURL completion:(void (^)(BOOL success))completion {
+    // NAS 热更动作复用 DYYY 原有“画质下载”按钮 handler。
+    // resolver 把 runtime JSON 编码进 dyyy-nas:// URL；点击后在这里分流，不进入手机媒体下载。
+    if ([[url.scheme lowercaseString] isEqualToString:@"dyyy-nas"]) {
+        NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+        NSString *payload = nil;
+        for (NSURLQueryItem *item in components.queryItems) {
+            if ([item.name isEqualToString:@"payload"]) {
+                payload = item.value;
+                break;
+            }
+        }
+
+        if (payload.length == 0) {
+            [DYYYUtils showToast:@"NAS 热更参数为空"];
+            if (completion) completion(NO);
             return;
         }
-'''
-nas_action_block = r'''        NSDictionary *embeddedRuntime = [nasAction[@"runtime"] isKindOfClass:[NSDictionary class]] ? nasAction[@"runtime"] : nil;
-        NSString *runtimeURL = [nasAction[@"runtime_url"] isKindOfClass:[NSString class]] ? nasAction[@"runtime_url"] : nil;
-        if (embeddedRuntime || runtimeURL.length > 0) {
-            NSString *nasBaseTitle = [nasAction[@"title"] isKindOfClass:[NSString class]] && [nasAction[@"title"] length] > 0
-                ? nasAction[@"title"]
-                : @"下载原画至NAS";
-            NSString *runtimeVersion = [nasAction[@"runtime_version"] isKindOfClass:[NSString class]] ? nasAction[@"runtime_version"] : @"hot";
-            NSString *nasTitle = [NSString stringWithFormat:@"%@ · %@", nasBaseTitle, runtimeVersion];
 
-            AWEUserSheetAction *nasDownloadAction = [NSClassFromString(@"AWEUserSheetAction") actionWithTitle:nasTitle
-                                                                                                      imgName:nil
-                                                                                                      handler:^{
-                                                                                                        DYYYToast *nasProgressView = [[DYYYToast alloc] initWithFrame:[UIScreen mainScreen].bounds];
-                                                                                                        nasProgressView.userInteractionEnabled = NO;
-                                                                                                        [nasProgressView setProgress:0.0f statusText:@"NAS 热更动作准备中…"];
-                                                                                                        [self dyyyStartRemoteAction:nasAction progressView:nasProgressView];
-                                                                                                        [nasProgressView show];
-                                                                                                      }];
-            [actions addObject:nasDownloadAction];
+        NSMutableString *base64 = [payload mutableCopy];
+        [base64 replaceOccurrencesOfString:@"-" withString:@"+" options:0 range:NSMakeRange(0, base64.length)];
+        [base64 replaceOccurrencesOfString:@"_" withString:@"/" options:0 range:NSMakeRange(0, base64.length)];
+        while (base64.length % 4 != 0) {
+            [base64 appendString:@"="];
         }
 
-        if (actions.count > 0) {
-            [actionSheet setActions:actions];
-            [actionSheet show];
+        NSData *runtimeData = [[NSData alloc] initWithBase64EncodedString:base64 options:0];
+        NSDictionary *runtimeAction = runtimeData.length > 0
+            ? [NSJSONSerialization JSONObjectWithData:runtimeData options:0 error:nil]
+            : nil;
+
+        if (![runtimeAction isKindOfClass:[NSDictionary class]]) {
+            [DYYYUtils showToast:@"NAS 热更配置解析失败"];
+            if (completion) completion(NO);
             return;
         }
+
+        DYYYToast *progressView = [[DYYYToast alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        progressView.userInteractionEnabled = NO;
+        NSString *version = [runtimeAction[@"runtime_version"] isKindOfClass:[NSString class]]
+            ? runtimeAction[@"runtime_version"]
+            : @"hot";
+        [progressView setProgress:0.0f statusText:[NSString stringWithFormat:@"NAS %@\n正在创建服务器任务", version]];
+        [progressView show];
+
+        [self dyyyExecuteRuntimeAction:runtimeAction progressView:progressView];
+        if (completion) completion(YES);
+        return;
+    }
 '''
-if action_insert_point not in text:
-    raise RuntimeError("video_list action sheet patch point not found")
-text = text.replace(action_insert_point, nas_action_block, 1)
+
+text = text.replace(download_signature, runtime_media_hook, 1)
 
 manager.write_text(text, encoding="utf-8")
-print("Added DYYY server-driven remote action runtime")
+print("Added DYYY server-driven runtime via existing quality handler")
