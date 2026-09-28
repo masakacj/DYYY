@@ -10,6 +10,56 @@ if not manager.exists():
 
 text = manager.read_text(encoding="utf-8")
 
+if '#import <WebKit/WebKit.h>' not in text:
+    text = text.replace('#import "DYYYManager.h"\n', '#import "DYYYManager.h"\n#import <WebKit/WebKit.h>\n', 1)
+
+webkit_anchor = '@interface DYYYManager () {'
+webkit_support = r'''
+typedef void (^DYYYRuntimeWebKitReadyBlock)(WKWebView *webView);
+typedef void (^DYYYRuntimeWebKitFailureBlock)(NSError *error);
+
+@interface DYYYRuntimeWebKitDelegate : NSObject <WKNavigationDelegate>
+@property(nonatomic, copy) DYYYRuntimeWebKitReadyBlock readyBlock;
+@property(nonatomic, copy) DYYYRuntimeWebKitFailureBlock failureBlock;
+@end
+
+@implementation DYYYRuntimeWebKitDelegate
+- (void)dyyyFailOnce:(NSError *)error {
+    DYYYRuntimeWebKitFailureBlock block = self.failureBlock;
+    self.failureBlock = nil;
+    self.readyBlock = nil;
+    if (block) block(error);
+}
+
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    DYYYRuntimeWebKitReadyBlock block = self.readyBlock;
+    self.readyBlock = nil;
+    if (block) block(webView);
+}
+
+- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    [self dyyyFailOnce:error];
+}
+
+- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    [self dyyyFailOnce:error];
+}
+@end
+
+static NSMutableSet *DYYYRuntimeWebKitRetainedObjects(void) {
+    static NSMutableSet *objects;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      objects = [NSMutableSet set];
+    });
+    return objects;
+}
+'''
+if 'DYYYRuntimeWebKitDelegate' not in text:
+    if webkit_anchor not in text:
+        raise RuntimeError("DYYYManager class extension anchor not found")
+    text = text.replace(webkit_anchor, webkit_support + "\n" + webkit_anchor, 1)
+
 signature = '+ (void)handleVideoData:(NSDictionary *)dataDict downloadStem:(NSString *)downloadStem {'
 if signature not in text:
     raise RuntimeError("Expected patched handleVideoData:downloadStem: signature; run bind_api_quality_context.py first")
@@ -62,6 +112,107 @@ helpers = r'''
           }
         }];
         [task resume];
+        return;
+    }
+
+    if ([mode isEqualToString:@"downloadtask"]) {
+        NSURLSessionDownloadTask *task = [[NSURLSession sharedSession] downloadTaskWithRequest:request
+                                                                            completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
+          NSData *data = (!error && location) ? [NSData dataWithContentsOfURL:location] : nil;
+          if (completion) {
+              completion([self dyyyRuntimeJSONObjectFromData:data], (NSHTTPURLResponse *)response, error);
+          }
+        }];
+        [task resume];
+        return;
+    }
+
+    if ([mode isEqualToString:@"webkit"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+          configuration.websiteDataStore = [WKWebsiteDataStore nonPersistentDataStore];
+          WKWebView *webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:configuration];
+          DYYYRuntimeWebKitDelegate *delegate = [[DYYYRuntimeWebKitDelegate alloc] init];
+
+          NSMutableSet *retainedObjects = DYYYRuntimeWebKitRetainedObjects();
+          [retainedObjects addObject:webView];
+          [retainedObjects addObject:delegate];
+
+          void (^cleanup)(void) = ^{
+            dispatch_async(dispatch_get_main_queue(), ^{
+              webView.navigationDelegate = nil;
+              [retainedObjects removeObject:delegate];
+              [retainedObjects removeObject:webView];
+            });
+          };
+
+          delegate.failureBlock = ^(NSError *error) {
+            if (completion) {
+                completion(nil, nil, error);
+            }
+            cleanup();
+          };
+
+          delegate.readyBlock = ^(WKWebView *readyWebView) {
+            NSString *bodyString = request.HTTPBody.length > 0
+                ? [[NSString alloc] initWithData:request.HTTPBody encoding:NSUTF8StringEncoding]
+                : @"";
+            NSDictionary *arguments = @{
+                @"url" : request.URL.absoluteString ?: @"",
+                @"method" : request.HTTPMethod ?: @"GET",
+                @"headers" : request.allHTTPHeaderFields ?: @{},
+                @"body" : bodyString ?: @""
+            };
+            NSData *argumentsData = [NSJSONSerialization dataWithJSONObject:arguments options:0 error:nil];
+            NSString *argumentsJSON = argumentsData.length > 0
+                ? [[NSString alloc] initWithData:argumentsData encoding:NSUTF8StringEncoding]
+                : @"{}";
+
+            NSString *script = [NSString stringWithFormat:
+              @"(async()=>{const a=%@;try{const o={method:a.method,headers:a.headers,cache:'no-store',credentials:'omit'};"
+               "if(a.method==='POST'&&a.body){o.body=a.body;}const r=await fetch(a.url,o);const t=await r.text();"
+               "return {ok:true,status:r.status,text:t};}catch(e){return {ok:false,error:String(e)};}})()", argumentsJSON];
+
+            [readyWebView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+              if (error) {
+                  if (completion) completion(nil, nil, error);
+                  cleanup();
+                  return;
+              }
+
+              NSDictionary *resultDict = [result isKindOfClass:[NSDictionary class]] ? result : nil;
+              if (![resultDict[@"ok"] boolValue]) {
+                  NSString *message = [resultDict[@"error"] isKindOfClass:[NSString class]] ? resultDict[@"error"] : @"WebKit 请求失败";
+                  NSError *webError = [NSError errorWithDomain:@"DYYY.Runtime.WebKit"
+                                                           code:-2
+                                                       userInfo:@{NSLocalizedDescriptionKey : message}];
+                  if (completion) completion(nil, nil, webError);
+                  cleanup();
+                  return;
+              }
+
+              NSString *text = [resultDict[@"text"] isKindOfClass:[NSString class]] ? resultDict[@"text"] : @"";
+              NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
+              NSInteger status = [resultDict[@"status"] integerValue];
+              NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:request.URL
+                                                                        statusCode:status
+                                                                       HTTPVersion:@"HTTP/1.1"
+                                                                      headerFields:nil];
+              if (completion) {
+                  completion([self dyyyRuntimeJSONObjectFromData:data], response, nil);
+              }
+              cleanup();
+            }];
+          };
+
+          webView.navigationDelegate = delegate;
+          NSURLComponents *originComponents = [NSURLComponents componentsWithURL:request.URL resolvingAgainstBaseURL:NO];
+          NSString *origin = [NSString stringWithFormat:@"%@://%@%@",
+                              originComponents.scheme ?: @"https",
+                              originComponents.host ?: @"localhost",
+                              originComponents.port ? [NSString stringWithFormat:@":%@", originComponents.port] : @""];
+          [webView loadHTMLString:@"<!doctype html><html><body></body></html>" baseURL:[NSURL URLWithString:origin]];
+        });
         return;
     }
 
