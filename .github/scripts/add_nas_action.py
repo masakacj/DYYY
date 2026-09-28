@@ -17,10 +17,12 @@ webkit_anchor = '@interface DYYYManager () {'
 webkit_support = r'''
 typedef void (^DYYYRuntimeWebKitReadyBlock)(WKWebView *webView);
 typedef void (^DYYYRuntimeWebKitFailureBlock)(NSError *error);
+typedef void (^DYYYRuntimeWebKitMessageBlock)(NSDictionary *message);
 
-@interface DYYYRuntimeWebKitDelegate : NSObject <WKNavigationDelegate>
+@interface DYYYRuntimeWebKitDelegate : NSObject <WKNavigationDelegate, WKScriptMessageHandler>
 @property(nonatomic, copy) DYYYRuntimeWebKitReadyBlock readyBlock;
 @property(nonatomic, copy) DYYYRuntimeWebKitFailureBlock failureBlock;
+@property(nonatomic, copy) DYYYRuntimeWebKitMessageBlock messageBlock;
 @end
 
 @implementation DYYYRuntimeWebKitDelegate
@@ -28,6 +30,7 @@ typedef void (^DYYYRuntimeWebKitFailureBlock)(NSError *error);
     DYYYRuntimeWebKitFailureBlock block = self.failureBlock;
     self.failureBlock = nil;
     self.readyBlock = nil;
+    self.messageBlock = nil;
     if (block) block(error);
 }
 
@@ -43,6 +46,16 @@ typedef void (^DYYYRuntimeWebKitFailureBlock)(NSError *error);
 
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     [self dyyyFailOnce:error];
+}
+
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (![message.name isEqualToString:@"dyyyRuntime"]) return;
+    NSDictionary *payload = [message.body isKindOfClass:[NSDictionary class]] ? message.body : nil;
+    DYYYRuntimeWebKitMessageBlock block = self.messageBlock;
+    self.messageBlock = nil;
+    self.readyBlock = nil;
+    self.failureBlock = nil;
+    if (block) block(payload ?: @{});
 }
 @end
 
@@ -188,8 +201,9 @@ helpers = r'''
         dispatch_async(dispatch_get_main_queue(), ^{
           WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
           configuration.websiteDataStore = [WKWebsiteDataStore nonPersistentDataStore];
-          WKWebView *webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:configuration];
           DYYYRuntimeWebKitDelegate *delegate = [[DYYYRuntimeWebKitDelegate alloc] init];
+          [configuration.userContentController addScriptMessageHandler:delegate name:@"dyyyRuntime"];
+          WKWebView *webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:configuration];
 
           NSMutableSet *retainedObjects = DYYYRuntimeWebKitRetainedObjects();
           [retainedObjects addObject:webView];
@@ -198,6 +212,7 @@ helpers = r'''
           void (^cleanup)(void) = ^{
             dispatch_async(dispatch_get_main_queue(), ^{
               webView.navigationDelegate = nil;
+              [webView.configuration.userContentController removeScriptMessageHandlerForName:@"dyyyRuntime"];
               [retainedObjects removeObject:delegate];
               [retainedObjects removeObject:webView];
             });
@@ -225,19 +240,7 @@ helpers = r'''
                 ? [[NSString alloc] initWithData:argumentsData encoding:NSUTF8StringEncoding]
                 : @"{}";
 
-            NSString *script = [NSString stringWithFormat:
-              @"(async()=>{const a=%@;try{const o={method:a.method,headers:a.headers,cache:'no-store',credentials:'omit'};"
-               "if(a.method==='POST'&&a.body){o.body=a.body;}const r=await fetch(a.url,o);const t=await r.text();"
-               "return {ok:true,status:r.status,text:t};}catch(e){return {ok:false,error:String(e)};}})()", argumentsJSON];
-
-            [readyWebView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
-              if (error) {
-                  if (completion) completion(nil, nil, error);
-                  cleanup();
-                  return;
-              }
-
-              NSDictionary *resultDict = [result isKindOfClass:[NSDictionary class]] ? result : nil;
+            delegate.messageBlock = ^(NSDictionary *resultDict) {
               if (![resultDict[@"ok"] boolValue]) {
                   NSString *message = [resultDict[@"error"] isKindOfClass:[NSString class]] ? resultDict[@"error"] : @"WebKit 请求失败";
                   NSError *webError = [NSError errorWithDomain:@"DYYY.Runtime.WebKit"
@@ -259,6 +262,20 @@ helpers = r'''
                   completion([self dyyyRuntimeJSONObjectFromData:data], response, nil);
               }
               cleanup();
+            };
+
+            NSString *script = [NSString stringWithFormat:
+              @"(()=>{const a=%@;const send=(v)=>window.webkit.messageHandlers.dyyyRuntime.postMessage(v);"
+               "try{const o={method:a.method,headers:a.headers,cache:'no-store',credentials:'omit'};"
+               "if(a.method==='POST'&&a.body){o.body=a.body;}fetch(a.url,o).then(async r=>{const t=await r.text();"
+               "send({ok:true,status:r.status,text:t});}).catch(e=>send({ok:false,error:String(e)}));"
+               "}catch(e){send({ok:false,error:String(e)});}return 'started';})()", argumentsJSON];
+
+            [readyWebView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+              if (error) {
+                  if (completion) completion(nil, nil, error);
+                  cleanup();
+              }
             }];
           };
 
