@@ -91,6 +91,58 @@ helpers = r'''
     return [object isKindOfClass:[NSDictionary class]] ? object : nil;
 }
 
++ (void)dyyyRuntimeSendViaNativeDownload:(NSURLRequest *)request
+                                          completion:(void (^)(NSDictionary *json, NSHTTPURLResponse *response, NSError *error))completion {
+    if (!request.URL) {
+        if (completion) {
+            completion(nil, nil, [NSError errorWithDomain:@"DYYY.Runtime.NativeDownload"
+                                                      code:-1
+                                                  userInfo:@{NSLocalizedDescriptionKey : @"native_download 地址无效"}]);
+        }
+        return;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      DYYYManager *manager = [DYYYManager shared];
+      NSString *downloadID = [NSUUID UUID].UUIDString;
+      __block NSURLSessionDownloadTask *nativeTask = nil;
+
+      [manager setCompletionBlock:^(BOOL success, NSURL *fileURL) {
+        NSData *data = success && fileURL ? [NSData dataWithContentsOfURL:fileURL] : nil;
+        NSDictionary *json = [self dyyyRuntimeJSONObjectFromData:data];
+        NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)nativeTask.response;
+
+        if (fileURL) {
+            [[NSFileManager defaultManager] removeItemAtURL:fileURL error:nil];
+            [manager finalizeDownloadWithFileURL:fileURL success:success];
+        }
+
+        if (completion) {
+            NSError *error = success
+                ? nil
+                : [NSError errorWithDomain:@"DYYY.Runtime.NativeDownload"
+                                       code:-2
+                                   userInfo:@{NSLocalizedDescriptionKey : @"native_download 请求失败"}];
+            completion(json, httpResponse, error);
+        }
+      } forDownloadID:downloadID];
+
+      [manager setMediaType:MediaTypeImage forDownloadID:downloadID];
+
+      NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
+      NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration
+                                                            delegate:manager
+                                                       delegateQueue:[NSOperationQueue mainQueue]];
+      nativeTask = [session downloadTaskWithRequest:request];
+      NSURLSessionDownloadTask *task = nativeTask;
+      task.taskDescription = downloadID;
+
+      [manager.downloadTasks setObject:task forKey:downloadID];
+      [manager.taskProgressMap setObject:@0.0 forKey:downloadID];
+      [task resume];
+    });
+}
+
 + (void)dyyyRuntimeSendRequest:(NSURLRequest *)request
                      transport:(NSString *)transport
                     completion:(void (^)(NSDictionary *json, NSHTTPURLResponse *response, NSError *error))completion {
@@ -124,6 +176,11 @@ helpers = r'''
           }
         }];
         [task resume];
+        return;
+    }
+
+    if ([mode isEqualToString:@"native_download"]) {
+        [self dyyyRuntimeSendViaNativeDownload:request completion:completion];
         return;
     }
 
