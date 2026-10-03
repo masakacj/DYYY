@@ -1883,8 +1883,32 @@
       NSString *state = [payload[@"state"] isKindOfClass:[NSString class]] ? payload[@"state"] : nil;
 
       double progressValue = [payload[@"progress"] doubleValue];
-      if (progressValue > 0.0 && progressValue <= 1.0 && state.length > 0) {
-          message = [NSString stringWithFormat:@"%@ %ld%%", message, (long)llround(progressValue * 100.0)];
+      double downloadedBytes = [payload[@"downloaded_bytes"] doubleValue];
+      double totalBytes = [payload[@"total_bytes"] doubleValue];
+      double speedBps = [payload[@"speed_bps"] doubleValue];
+
+      NSMutableArray<NSString *> *statusParts = [NSMutableArray array];
+      if (progressValue >= 0.0 && progressValue <= 1.0 && totalBytes > 0.0) {
+          [statusParts addObject:[NSString stringWithFormat:@"%ld%%", (long)llround(progressValue * 100.0)]];
+      }
+
+      if (speedBps > 0.0) {
+          NSString *speedText = [DYYYUtils formattedSize:(unsigned long long)llround(speedBps)];
+          [statusParts addObject:[NSString stringWithFormat:@"%@/s", speedText]];
+      }
+
+      if (totalBytes > 0.0) {
+          NSString *totalText = [DYYYUtils formattedSize:(unsigned long long)llround(totalBytes)];
+          if (downloadedBytes > 0.0) {
+              NSString *downloadedText = [DYYYUtils formattedSize:(unsigned long long)llround(downloadedBytes)];
+              [statusParts addObject:[NSString stringWithFormat:@"%@ / %@", downloadedText, totalText]];
+          } else {
+              [statusParts addObject:totalText];
+          }
+      }
+
+      if (statusParts.count > 0) {
+          message = [NSString stringWithFormat:@"%@\n%@", message, [statusParts componentsJoinedByString:@" · "]];
       }
 
       dispatch_async(dispatch_get_main_queue(), ^{
