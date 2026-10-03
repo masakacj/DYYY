@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 static IMP CJNasOriginalHandleVideoData = NULL;
 
@@ -27,7 +28,6 @@ static void CJNasPatchInit(void) {
         Class manager = NSClassFromString(@"DYYYManager");
         if (!manager) return;
 
-        Class meta = object_getClass(manager);
         SEL selector = NSSelectorFromString(@"handleVideoData:");
         Method method = class_getClassMethod(manager, selector);
         if (!method) return;
