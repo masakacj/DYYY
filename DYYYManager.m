@@ -1849,109 +1849,63 @@
     [dataTask resume];
 }
 
-+ (void)cjPollNasStatusURL:(NSURL *)statusURL {
-    if (!statusURL) return;
-
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:statusURL
-                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
-                                                       timeoutInterval:15.0];
-    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
-
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
-                                                                completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-      if (error || data.length == 0) {
-          dispatch_async(dispatch_get_main_queue(), ^{
-            [DYYYUtils showToast:[NSString stringWithFormat:@"NAS进度查询失败: %@", error.localizedDescription ?: @"无响应"]];
-          });
-          return;
-      }
-
-      NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-      NSDictionary *payload = [json[@"data"] isKindOfClass:[NSDictionary class]] ? json[@"data"] : nil;
-      NSString *state = [payload[@"state"] isKindOfClass:[NSString class]] ? payload[@"state"] : @"";
-      if (!payload) {
-          dispatch_async(dispatch_get_main_queue(), ^{
-            [DYYYUtils showToast:@"NAS进度响应无效"];
-          });
-          return;
-      }
-
-      if ([state isEqualToString:@"completed"]) {
-          NSString *filename = [payload[@"filename"] isKindOfClass:[NSString class]] ? payload[@"filename"] : @"";
-          dispatch_async(dispatch_get_main_queue(), ^{
-            [DYYYUtils showToast:filename.length > 0
-                ? [NSString stringWithFormat:@"NAS下载完成\n%@", filename]
-                : @"NAS下载完成"];
-          });
-          return;
-      }
-
-      if ([state isEqualToString:@"failed"] || [state isEqualToString:@"cancelled"]) {
-          NSString *message = [payload[@"error"] isKindOfClass:[NSString class]] ? payload[@"error"] : @"NAS下载失败";
-          dispatch_async(dispatch_get_main_queue(), ^{
-            [DYYYUtils showToast:message];
-          });
-          return;
-      }
-
-      double downloaded = [payload[@"downloaded_bytes"] doubleValue];
-      double total = [payload[@"total_bytes"] doubleValue];
-      NSInteger percent = total > 0 ? (NSInteger)llround(MIN(1.0, downloaded / total) * 100.0) : 0;
-      dispatch_async(dispatch_get_main_queue(), ^{
-        [DYYYUtils showToast:total > 0
-            ? [NSString stringWithFormat:@"NAS下载中 %ld%%", (long)percent]
-            : @"NAS准备中…"];
-      });
-
-      NSString *statusString = [payload[@"status_url_absolute"] isKindOfClass:[NSString class]] ? payload[@"status_url_absolute"] : nil;
-      NSURL *nextURL = statusString.length > 0 ? [NSURL URLWithString:statusString] : statusURL;
-      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
-                     dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        [self cjPollNasStatusURL:nextURL];
-      });
-    }];
-    [task resume];
-}
-
-+ (void)cjStartNasDownloadURL:(NSURL *)startURL {
-    if (!startURL) {
-        [DYYYUtils showToast:@"NAS下载地址无效"];
++ (void)cjRunRemoteRequestActionURL:(NSURL *)url method:(NSString *)method {
+    if (!url) {
+        [DYYYUtils showToast:@"请求地址无效"];
         return;
     }
 
-    [DYYYUtils showToast:@"正在创建NAS下载任务…"];
-
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:startURL
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
                                                            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
-                                                       timeoutInterval:15.0];
+                                                       timeoutInterval:20.0];
+    request.HTTPMethod = [method.uppercaseString isEqualToString:@"POST"] ? @"POST" : @"GET";
     [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
 
     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
                                                                 completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
       if (error || data.length == 0) {
           dispatch_async(dispatch_get_main_queue(), ^{
-            [DYYYUtils showToast:[NSString stringWithFormat:@"NAS任务创建失败: %@", error.localizedDescription ?: @"无响应"]];
+            [DYYYUtils showToast:[NSString stringWithFormat:@"请求失败: %@", error.localizedDescription ?: @"无响应"]];
           });
           return;
       }
 
       NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-      NSDictionary *payload = [json[@"data"] isKindOfClass:[NSDictionary class]] ? json[@"data"] : nil;
-      NSString *statusString = [payload[@"status_url_absolute"] isKindOfClass:[NSString class]] ? payload[@"status_url_absolute"] : nil;
-      NSURL *statusURL = statusString.length > 0 ? [NSURL URLWithString:statusString] : nil;
-
-      if (!statusURL) {
-          NSString *message = [json[@"msg"] isKindOfClass:[NSString class]] ? json[@"msg"] : @"NAS任务响应无效";
+      if (![json isKindOfClass:[NSDictionary class]]) {
           dispatch_async(dispatch_get_main_queue(), ^{
-            [DYYYUtils showToast:message];
+            [DYYYUtils showToast:@"服务器返回格式无效"];
           });
           return;
       }
 
+      NSString *message = [json[@"msg"] isKindOfClass:[NSString class]] ? json[@"msg"] : @"请求完成";
+      NSDictionary *payload = [json[@"data"] isKindOfClass:[NSDictionary class]] ? json[@"data"] : nil;
+      NSString *state = [payload[@"state"] isKindOfClass:[NSString class]] ? payload[@"state"] : nil;
+
+      double progressValue = [payload[@"progress"] doubleValue];
+      if (progressValue > 0.0 && progressValue <= 1.0 && state.length > 0) {
+          message = [NSString stringWithFormat:@"%@ %ld%%", message, (long)llround(progressValue * 100.0)];
+      }
+
       dispatch_async(dispatch_get_main_queue(), ^{
-        [DYYYUtils showToast:@"NAS任务已创建"];
+        [DYYYUtils showToast:message];
       });
-      [self cjPollNasStatusURL:statusURL];
+
+      NSString *nextString = [payload[@"next_url"] isKindOfClass:[NSString class]] ? payload[@"next_url"] : nil;
+      if (nextString.length == 0) {
+          nextString = [payload[@"status_url_absolute"] isKindOfClass:[NSString class]] ? payload[@"status_url_absolute"] : nil;
+      }
+
+      BOOL terminal = [state isEqualToString:@"completed"]
+                   || [state isEqualToString:@"failed"]
+                   || [state isEqualToString:@"cancelled"];
+      if (!terminal && nextString.length > 0) {
+          NSURL *nextURL = [NSURL URLWithString:nextString];
+          dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                         dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            [self cjRunRemoteRequestActionURL:nextURL method:@"GET"];
+          });
+      }
     }];
     [task resume];
 }
@@ -1959,7 +1913,6 @@
 + (void)handleVideoData:(NSDictionary *)dataDict {
     // 首先检查videos和images数组
     NSArray *videoList = dataDict[@"video_list"];
-    NSString *nasURLString = [dataDict[@"nas_url"] isKindOfClass:[NSString class]] ? dataDict[@"nas_url"] : nil;
     NSArray *videos = dataDict[@"videos"];
     NSArray *images = dataDict[@"images"];
     NSArray *imgArray = dataDict[@"img"];
@@ -1989,16 +1942,23 @@
         for (NSDictionary *videoDict in videoList) {
             NSString *url = videoDict[@"url"];
             NSString *level = videoDict[@"level"];
+            NSString *type = [videoDict[@"type"] isKindOfClass:[NSString class]] ? [videoDict[@"type"] lowercaseString] : @"download";
+            NSString *method = [videoDict[@"method"] isKindOfClass:[NSString class]] ? videoDict[@"method"] : @"GET";
             if (url.length > 0 && level.length > 0) {
                 AWEUserSheetAction *qualityAction = [NSClassFromString(@"AWEUserSheetAction") actionWithTitle:level
                                                                                                       imgName:nil
                                                                                                       handler:^{
-                                                                                                        NSURL *videoDownloadUrl = [NSURL URLWithString:url];
+                                                                                                        NSURL *actionURL = [NSURL URLWithString:url];
+                                                                                                        if ([type isEqualToString:@"request"]) {
+                                                                                                            [self cjRunRemoteRequestActionURL:actionURL method:method];
+                                                                                                            return;
+                                                                                                        }
+
                                                                                                         NSURL *optionalAudioURL = nil;
                                                                                                         if (musicURL.length > 0) {
                                                                                                             optionalAudioURL = [NSURL URLWithString:musicURL];
                                                                                                         }
-                                                                                                        [self downloadMedia:videoDownloadUrl
+                                                                                                        [self downloadMedia:actionURL
                                                                                                                   mediaType:MediaTypeVideo
                                                                                                                       audio:optionalAudioURL
                                                                                                                  completion:^(BOOL success) {
@@ -2008,16 +1968,6 @@
                                                                                                       }];
                 [actions addObject:qualityAction];
             }
-        }
-
-        if (nasURLString.length > 0) {
-            AWEUserSheetAction *nasAction = [NSClassFromString(@"AWEUserSheetAction") actionWithTitle:@"下载原画至NAS"
-                                                                                               imgName:nil
-                                                                                               handler:^{
-                                                                                                 NSURL *nasURL = [NSURL URLWithString:nasURLString];
-                                                                                                 [self cjStartNasDownloadURL:nasURL];
-                                                                                               }];
-            [actions addObject:nasAction];
         }
 
         if (actions.count > 0) {
