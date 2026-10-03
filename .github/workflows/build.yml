@@ -4,9 +4,15 @@ on:
   push:
     branches-ignore:
       - dev
+    paths-ignore:
+      - 'CJNasPatch/**'
+      - '.github/workflows/cjnaspatch.yml'
   pull_request:
     branches-ignore:
       - dev
+    paths-ignore:
+      - 'CJNasPatch/**'
+      - '.github/workflows/cjnaspatch.yml'
 
 permissions:
   contents: write
@@ -32,7 +38,6 @@ jobs:
           python3 .github/scripts/fix_api_download_rename.py .
           python3 .github/scripts/bind_api_quality_context.py .
           python3 .github/scripts/align_api_with_save_video.py .
-          python3 .github/scripts/add_nas_action.py .
           git diff -- DYYYManager.h DYYYManager.m DYYYLongPressPanel.xm
 
       - name: Check cache
