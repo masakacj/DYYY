@@ -1849,9 +1849,117 @@
     [dataTask resume];
 }
 
++ (void)cjPollNasStatusURL:(NSURL *)statusURL {
+    if (!statusURL) return;
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:statusURL
+                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                       timeoutInterval:15.0];
+    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+                                                                completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+      if (error || data.length == 0) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [DYYYUtils showToast:[NSString stringWithFormat:@"NAS进度查询失败: %@", error.localizedDescription ?: @"无响应"]];
+          });
+          return;
+      }
+
+      NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+      NSDictionary *payload = [json[@"data"] isKindOfClass:[NSDictionary class]] ? json[@"data"] : nil;
+      NSString *state = [payload[@"state"] isKindOfClass:[NSString class]] ? payload[@"state"] : @"";
+      if (!payload) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [DYYYUtils showToast:@"NAS进度响应无效"];
+          });
+          return;
+      }
+
+      if ([state isEqualToString:@"completed"]) {
+          NSString *filename = [payload[@"filename"] isKindOfClass:[NSString class]] ? payload[@"filename"] : @"";
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [DYYYUtils showToast:filename.length > 0
+                ? [NSString stringWithFormat:@"NAS下载完成\n%@", filename]
+                : @"NAS下载完成"];
+          });
+          return;
+      }
+
+      if ([state isEqualToString:@"failed"] || [state isEqualToString:@"cancelled"]) {
+          NSString *message = [payload[@"error"] isKindOfClass:[NSString class]] ? payload[@"error"] : @"NAS下载失败";
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [DYYYUtils showToast:message];
+          });
+          return;
+      }
+
+      double downloaded = [payload[@"downloaded_bytes"] doubleValue];
+      double total = [payload[@"total_bytes"] doubleValue];
+      NSInteger percent = total > 0 ? (NSInteger)llround(MIN(1.0, downloaded / total) * 100.0) : 0;
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [DYYYUtils showToast:total > 0
+            ? [NSString stringWithFormat:@"NAS下载中 %ld%%", (long)percent]
+            : @"NAS准备中…"];
+      });
+
+      NSString *statusString = [payload[@"status_url_absolute"] isKindOfClass:[NSString class]] ? payload[@"status_url_absolute"] : nil;
+      NSURL *nextURL = statusString.length > 0 ? [NSURL URLWithString:statusString] : statusURL;
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                     dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        [self cjPollNasStatusURL:nextURL];
+      });
+    }];
+    [task resume];
+}
+
++ (void)cjStartNasDownloadURL:(NSURL *)startURL {
+    if (!startURL) {
+        [DYYYUtils showToast:@"NAS下载地址无效"];
+        return;
+    }
+
+    [DYYYUtils showToast:@"正在创建NAS下载任务…"];
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:startURL
+                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                       timeoutInterval:15.0];
+    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+                                                                completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+      if (error || data.length == 0) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [DYYYUtils showToast:[NSString stringWithFormat:@"NAS任务创建失败: %@", error.localizedDescription ?: @"无响应"]];
+          });
+          return;
+      }
+
+      NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+      NSDictionary *payload = [json[@"data"] isKindOfClass:[NSDictionary class]] ? json[@"data"] : nil;
+      NSString *statusString = [payload[@"status_url_absolute"] isKindOfClass:[NSString class]] ? payload[@"status_url_absolute"] : nil;
+      NSURL *statusURL = statusString.length > 0 ? [NSURL URLWithString:statusString] : nil;
+
+      if (!statusURL) {
+          NSString *message = [json[@"msg"] isKindOfClass:[NSString class]] ? json[@"msg"] : @"NAS任务响应无效";
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [DYYYUtils showToast:message];
+          });
+          return;
+      }
+
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [DYYYUtils showToast:@"NAS任务已创建"];
+      });
+      [self cjPollNasStatusURL:statusURL];
+    }];
+    [task resume];
+}
+
 + (void)handleVideoData:(NSDictionary *)dataDict {
     // 首先检查videos和images数组
     NSArray *videoList = dataDict[@"video_list"];
+    NSString *nasURLString = [dataDict[@"nas_url"] isKindOfClass:[NSString class]] ? dataDict[@"nas_url"] : nil;
     NSArray *videos = dataDict[@"videos"];
     NSArray *images = dataDict[@"images"];
     NSArray *imgArray = dataDict[@"img"];
@@ -1900,6 +2008,16 @@
                                                                                                       }];
                 [actions addObject:qualityAction];
             }
+        }
+
+        if (nasURLString.length > 0) {
+            AWEUserSheetAction *nasAction = [NSClassFromString(@"AWEUserSheetAction") actionWithTitle:@"下载原画至NAS"
+                                                                                               imgName:nil
+                                                                                               handler:^{
+                                                                                                 NSURL *nasURL = [NSURL URLWithString:nasURLString];
+                                                                                                 [self cjStartNasDownloadURL:nasURL];
+                                                                                               }];
+            [actions addObject:nasAction];
         }
 
         if (actions.count > 0) {
