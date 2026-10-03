@@ -1,0 +1,76 @@
+name: Build CJNasPatch
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'CJNasPatch/**'
+      - '.github/workflows/cjnaspatch.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cjnaspatch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Prepare Theos
+        uses: huami1314/theos-action@main
+
+      - name: Setup GNU Make
+        run: echo "$(brew --prefix)/opt/make/libexec/gnubin" >> $GITHUB_PATH
+
+      - name: Build standalone dylib
+        working-directory: CJNasPatch
+        run: |
+          rm -rf .theos ../cjnas-artifacts
+          mkdir -p ../cjnas-artifacts
+          make clean all FINALPACKAGE=1 -j$(sysctl -n hw.ncpu)
+          PATCH=$(find .theos -type f -name 'CJNasPatch.dylib' | head -n 1)
+          if [ -z "$PATCH" ]; then
+            echo "CJNasPatch.dylib not found"
+            exit 1
+          fi
+          cp -f "$PATCH" ../cjnas-artifacts/CJNasPatch.dylib
+          file ../cjnas-artifacts/CJNasPatch.dylib
+          shasum -a 256 ../cjnas-artifacts/CJNasPatch.dylib
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name: CJNasPatch
+          path: cjnas-artifacts/CJNasPatch.dylib
+
+      - name: Move cjnas-latest tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git tag -f cjnas-latest "$GITHUB_SHA"
+          git push origin refs/tags/cjnas-latest --force
+
+      - name: Replace cjnas-latest release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete cjnas-latest --yes || true
+
+      - name: Publish CJNasPatch release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: cjnas-latest
+          name: CJNasPatch Latest
+          body: |
+            Standalone companion patch for stock DYYY.
+            Initial compatibility target: DYYY 2.3-0 #19.
+            Inject this dylib alongside the original DYYY dylib.
+          prerelease: false
+          overwrite_files: true
+          files: cjnas-artifacts/CJNasPatch.dylib
