@@ -840,6 +840,9 @@ static DYYYToast *gCJRemoteRequestProgressView = nil;
       [self.mediaTypeMap removeObjectForKey:downloadID];
       [self.downloadTasks removeObjectForKey:downloadID];
       [self.downloadToBatchMap removeObjectForKey:downloadID];
+      [self.downloadLastBytesMap removeObjectForKey:downloadID];
+      [self.downloadLastTimestampMap removeObjectForKey:downloadID];
+      [self.downloadSpeedMap removeObjectForKey:downloadID];
     });
 
     if (fileURL) {
