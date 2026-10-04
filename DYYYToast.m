@@ -5,6 +5,7 @@
 
 @property(nonatomic, strong) CAShapeLayer *progressLayer;
 @property(nonatomic, strong) UILabel *percentLabel;
+@property(nonatomic, strong) UILabel *circlePercentLabel;
 @property(nonatomic, assign) CGFloat progress;
 @property(nonatomic, strong) UIVisualEffectView *blurEffectView;
 @property(nonatomic, strong) CAShapeLayer *checkmarkLayer;
@@ -83,6 +84,16 @@
         _progressLayer.strokeEnd = 0;
         [_progressView.layer addSublayer:_progressLayer];
 
+        _circlePercentLabel = [[UILabel alloc] initWithFrame:_progressView.bounds];
+        _circlePercentLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        _circlePercentLabel.textAlignment = NSTextAlignmentCenter;
+        _circlePercentLabel.textColor = isDarkMode ? [UIColor colorWithWhite:0.92 alpha:1.0] : [UIColor colorWithWhite:0.18 alpha:1.0];
+        _circlePercentLabel.font = [UIFont monospacedDigitSystemFontOfSize:8.5 weight:UIFontWeightSemibold];
+        _circlePercentLabel.adjustsFontSizeToFitWidth = YES;
+        _circlePercentLabel.minimumScaleFactor = 0.72;
+        _circlePercentLabel.text = @"0%";
+        [_progressView addSubview:_circlePercentLabel];
+
         _percentLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, containerWidth, containerHeight)];
         _percentLabel.textAlignment = NSTextAlignmentCenter;
         _percentLabel.textColor = isDarkMode ? [UIColor colorWithWhite:0.9 alpha:1.0] : [UIColor colorWithWhite:0.2 alpha:1.0];
@@ -119,8 +130,9 @@
     progress = MAX(0.0, MIN(1.0, progress));
     _progress = progress;
 
-    // 设置环形进度
+    // 设置环形进度，并把百分比放在圆心，右侧只承载状态/速度/大小。
     _progressLayer.strokeEnd = progress;
+    _circlePercentLabel.text = [NSString stringWithFormat:@"%d%%", (int)llround(progress * 100.0f)];
 
     if (statusText.length > 0) {
         CGFloat containerWidth = 238.0;
@@ -145,8 +157,7 @@
     }
 
     // 保持现有下载进度显示不变
-    int percentage = (int)(progress * 100);
-    _percentLabel.text = [NSString stringWithFormat:@"下载中... %d%%", percentage];
+    _percentLabel.text = @"下载中…";
 }
 
 - (void)show {
@@ -259,6 +270,7 @@
           [UIView animateWithDuration:0.15
               animations:^{
                 self.progressLayer.opacity = 0;
+                self.circlePercentLabel.alpha = 0;
 
                 [UIView transitionWithView:self.percentLabel
                                   duration:0.2
@@ -347,6 +359,7 @@
     circleLayer.opacity = 0;
 
     [self.progressView.layer addSublayer:circleLayer];
+    self.circlePercentLabel.alpha = 0;
 
     CAShapeLayer *crossLayer = [CAShapeLayer layer];
 
