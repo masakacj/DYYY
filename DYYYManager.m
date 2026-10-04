@@ -29,6 +29,9 @@
 @property(nonatomic, strong) NSMutableDictionary<NSString *, void (^)(BOOL success, NSURL *fileURL)> *completionBlocks;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *mediaTypeMap;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *filePathToDownloadID;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *downloadLastBytesMap;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *downloadLastTimestampMap;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *downloadSpeedMap;
 
 // 批量下载相关属性
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *downloadToBatchMap;                                                 // 下载ID到批量ID的映射
@@ -38,6 +41,8 @@
 @property(nonatomic, strong) NSMutableDictionary<NSString *, void (^)(NSInteger current, NSInteger total)> *batchProgressBlocks;              // 批量进度回调
 @property(nonatomic, strong) NSMutableDictionary<NSString *, void (^)(NSInteger successCount, NSInteger totalCount)> *batchCompletionBlocks;  // 批量完成回调
 @end
+
+static DYYYToast *gCJRemoteRequestProgressView = nil;
 
 @implementation DYYYManager
 
@@ -62,6 +67,9 @@
         _completionBlocks = [NSMutableDictionary dictionary];
         _mediaTypeMap = [NSMutableDictionary dictionary];
         _filePathToDownloadID = [NSMutableDictionary dictionary];
+        _downloadLastBytesMap = [NSMutableDictionary dictionary];
+        _downloadLastTimestampMap = [NSMutableDictionary dictionary];
+        _downloadSpeedMap = [NSMutableDictionary dictionary];
 
         // 初始化批量下载相关字典
         _downloadToBatchMap = [NSMutableDictionary dictionary];
@@ -530,6 +538,9 @@
       // 存储下载任务
       [[DYYYManager shared].downloadTasks setObject:downloadTask forKey:downloadID];
       [[DYYYManager shared].taskProgressMap setObject:@0.0 forKey:downloadID];  // 初始化进度为0
+      [[DYYYManager shared].downloadLastBytesMap setObject:@0 forKey:downloadID];
+      [[DYYYManager shared].downloadLastTimestampMap setObject:@(CFAbsoluteTimeGetCurrent()) forKey:downloadID];
+      [[DYYYManager shared].downloadSpeedMap setObject:@0 forKey:downloadID];
 
       // 开始下载
       [downloadTask resume];
@@ -867,15 +878,36 @@
           }
       }
 
-      // 如果找到对应的进度视图，更新进度
+      // 如果找到对应的进度视图，更新圆环、速度和大小
       if (downloadIDForTask) {
           [self.taskProgressMap setObject:@(progress) forKey:downloadIDForTask];
 
+          CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+          int64_t previousBytes = [self.downloadLastBytesMap[downloadIDForTask] longLongValue];
+          CFAbsoluteTime previousTime = [self.downloadLastTimestampMap[downloadIDForTask] doubleValue];
+          double speedBps = [self.downloadSpeedMap[downloadIDForTask] doubleValue];
+          double elapsed = now - previousTime;
+
+          if (elapsed >= 0.25) {
+              int64_t deltaBytes = MAX((int64_t)0, totalBytesWritten - previousBytes);
+              double instantSpeed = deltaBytes / elapsed;
+              speedBps = speedBps > 0.0 ? speedBps * 0.35 + instantSpeed * 0.65 : instantSpeed;
+              self.downloadLastBytesMap[downloadIDForTask] = @(totalBytesWritten);
+              self.downloadLastTimestampMap[downloadIDForTask] = @(now);
+              self.downloadSpeedMap[downloadIDForTask] = @(speedBps);
+          }
+
           DYYYToast *progressView = self.progressViews[downloadIDForTask];
-          if (progressView) {
-              if (!progressView.isCancelled) {
-                  [progressView setProgress:progress];
-              }
+          if (progressView && !progressView.isCancelled) {
+              NSString *receivedText = [DYYYUtils formattedSize:(unsigned long long)MAX((int64_t)0, totalBytesWritten)];
+              NSString *totalText = [DYYYUtils formattedSize:(unsigned long long)MAX((int64_t)0, totalBytesExpectedToWrite)];
+              NSString *detailText = speedBps > 0.0
+                  ? [NSString stringWithFormat:@"接口下载\n%@/s · %@ / %@",
+                                               [DYYYUtils formattedSize:(unsigned long long)llround(speedBps)],
+                                               receivedText,
+                                               totalText]
+                  : [NSString stringWithFormat:@"接口下载\n%@ / %@", receivedText, totalText];
+              [progressView setProgress:progress statusText:detailText];
           }
       }
     });
@@ -1849,9 +1881,81 @@
     [dataTask resume];
 }
 
++ (void)cjUpdateRemoteRequestProgressWithMessage:(NSString *)message payload:(NSDictionary *)payload {
+    NSString *state = [payload[@"state"] isKindOfClass:[NSString class]] ? payload[@"state"] : nil;
+    double progressValue = [payload[@"progress"] doubleValue];
+    double downloadedBytes = [payload[@"downloaded_bytes"] doubleValue];
+    double totalBytes = [payload[@"total_bytes"] doubleValue];
+    double speedBps = [payload[@"speed_bps"] doubleValue];
+
+    progressValue = MAX(0.0, MIN(1.0, progressValue));
+
+    NSMutableArray<NSString *> *detailParts = [NSMutableArray array];
+    if (speedBps > 0.0) {
+        NSString *speedText = [DYYYUtils formattedSize:(unsigned long long)llround(speedBps)];
+        [detailParts addObject:[NSString stringWithFormat:@"%@/s", speedText]];
+    }
+    if (totalBytes > 0.0) {
+        NSString *totalText = [DYYYUtils formattedSize:(unsigned long long)llround(totalBytes)];
+        NSString *downloadedText = [DYYYUtils formattedSize:(unsigned long long)llround(MAX(0.0, downloadedBytes))];
+        [detailParts addObject:[NSString stringWithFormat:@"%@ / %@", downloadedText, totalText]];
+    } else if ([state isEqualToString:@"preparing"]) {
+        [detailParts addObject:@"准备中…"];
+    }
+
+    NSString *statusText = message.length > 0 ? message : @"任务进行中";
+    if (detailParts.count > 0) {
+        statusText = [NSString stringWithFormat:@"%@\n%@", statusText, [detailParts componentsJoinedByString:@" · "]];
+    }
+
+    BOOL terminal = [state isEqualToString:@"completed"]
+                 || [state isEqualToString:@"failed"]
+                 || [state isEqualToString:@"cancelled"];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (!gCJRemoteRequestProgressView) {
+          gCJRemoteRequestProgressView = [[DYYYToast alloc] initWithFrame:[UIScreen mainScreen].bounds];
+          // 通用远程任务暂不把点击手势解释为服务端取消，避免只隐藏 UI 而任务继续执行。
+          gCJRemoteRequestProgressView.userInteractionEnabled = NO;
+          [gCJRemoteRequestProgressView show];
+      }
+
+      [gCJRemoteRequestProgressView setProgress:(float)progressValue statusText:statusText];
+
+      if (terminal) {
+          DYYYToast *finishedView = gCJRemoteRequestProgressView;
+          gCJRemoteRequestProgressView = nil;
+
+          if ([state isEqualToString:@"completed"]) {
+              finishedView.allowSuccessAnimation = YES;
+              [finishedView dismiss];
+          } else {
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [finishedView dismiss];
+              });
+          }
+      }
+    });
+}
+
++ (void)cjFailRemoteRequestProgress:(NSString *)message {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (gCJRemoteRequestProgressView) {
+          DYYYToast *failedView = gCJRemoteRequestProgressView;
+          gCJRemoteRequestProgressView = nil;
+          [failedView setProgress:0.0 statusText:message.length > 0 ? message : @"请求失败"];
+          dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [failedView dismiss];
+          });
+      } else {
+          [DYYYUtils showToast:message.length > 0 ? message : @"请求失败"];
+      }
+    });
+}
+
 + (void)cjRunRemoteRequestActionURL:(NSURL *)url method:(NSString *)method {
     if (!url) {
-        [DYYYUtils showToast:@"请求地址无效"];
+        [self cjFailRemoteRequestProgress:@"请求地址无效"];
         return;
     }
 
@@ -1864,56 +1968,21 @@
     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
                                                                 completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
       if (error || data.length == 0) {
-          dispatch_async(dispatch_get_main_queue(), ^{
-            [DYYYUtils showToast:[NSString stringWithFormat:@"请求失败: %@", error.localizedDescription ?: @"无响应"]];
-          });
+          [self cjFailRemoteRequestProgress:[NSString stringWithFormat:@"请求失败\n%@", error.localizedDescription ?: @"无响应"]];
           return;
       }
 
       NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
       if (![json isKindOfClass:[NSDictionary class]]) {
-          dispatch_async(dispatch_get_main_queue(), ^{
-            [DYYYUtils showToast:@"服务器返回格式无效"];
-          });
+          [self cjFailRemoteRequestProgress:@"服务器返回格式无效"];
           return;
       }
 
       NSString *message = [json[@"msg"] isKindOfClass:[NSString class]] ? json[@"msg"] : @"请求完成";
-      NSDictionary *payload = [json[@"data"] isKindOfClass:[NSDictionary class]] ? json[@"data"] : nil;
+      NSDictionary *payload = [json[@"data"] isKindOfClass:[NSDictionary class]] ? json[@"data"] : @{};
       NSString *state = [payload[@"state"] isKindOfClass:[NSString class]] ? payload[@"state"] : nil;
 
-      double progressValue = [payload[@"progress"] doubleValue];
-      double downloadedBytes = [payload[@"downloaded_bytes"] doubleValue];
-      double totalBytes = [payload[@"total_bytes"] doubleValue];
-      double speedBps = [payload[@"speed_bps"] doubleValue];
-
-      NSMutableArray<NSString *> *statusParts = [NSMutableArray array];
-      if (progressValue >= 0.0 && progressValue <= 1.0 && totalBytes > 0.0) {
-          [statusParts addObject:[NSString stringWithFormat:@"%ld%%", (long)llround(progressValue * 100.0)]];
-      }
-
-      if (speedBps > 0.0) {
-          NSString *speedText = [DYYYUtils formattedSize:(unsigned long long)llround(speedBps)];
-          [statusParts addObject:[NSString stringWithFormat:@"%@/s", speedText]];
-      }
-
-      if (totalBytes > 0.0) {
-          NSString *totalText = [DYYYUtils formattedSize:(unsigned long long)llround(totalBytes)];
-          if (downloadedBytes > 0.0) {
-              NSString *downloadedText = [DYYYUtils formattedSize:(unsigned long long)llround(downloadedBytes)];
-              [statusParts addObject:[NSString stringWithFormat:@"%@ / %@", downloadedText, totalText]];
-          } else {
-              [statusParts addObject:totalText];
-          }
-      }
-
-      if (statusParts.count > 0) {
-          message = [NSString stringWithFormat:@"%@\n%@", message, [statusParts componentsJoinedByString:@" · "]];
-      }
-
-      dispatch_async(dispatch_get_main_queue(), ^{
-        [DYYYUtils showToast:message];
-      });
+      [self cjUpdateRemoteRequestProgressWithMessage:message payload:payload];
 
       NSString *nextString = [payload[@"next_url"] isKindOfClass:[NSString class]] ? payload[@"next_url"] : nil;
       if (nextString.length == 0) {
