@@ -31,6 +31,9 @@
 - **辅助代理**
   - `DYYYImagePickerDelegate.(h/m)`、`DYYYBackupPickerDelegate.(h/m)`：统一封装系统 Picker 逻辑。
   - `DYYYCustomInputView.(h/m)`：文本输入。
+- **独立快手注入插件**
+  - `KwaiParsePatch/`：面向快手 iOS（`com.jiangjia.gif`）的 standalone dylib，不依赖 DYYY 私有类；当前通过 `UIPasteboard` 捕获“复制链接”，调用 DYYY-compatible 解析接口并提供画质选择/相册保存。
+  - 该目录不得引用 `DYYYManager` / `AwemeHeaders.h`，保持可单独注入和单独 CI 构建。
 - **ABTest / 远程配置**
   - `DYYYABTestHook.(h/xm)`：抖音 ABTest 注入。
 

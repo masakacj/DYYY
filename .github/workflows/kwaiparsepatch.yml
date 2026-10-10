@@ -1,0 +1,79 @@
+name: Build KwaiParsePatch
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'KwaiParsePatch/**'
+      - '.github/workflows/kwaiparsepatch.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kwaiparsepatch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Prepare Theos
+        uses: huami1314/theos-action@main
+
+      - name: Setup GNU Make
+        run: echo "$(brew --prefix)/opt/make/libexec/gnubin" >> $GITHUB_PATH
+
+      - name: Build standalone dylib
+        working-directory: KwaiParsePatch
+        run: |
+          rm -rf .theos ../kwaiparse-artifacts
+          mkdir -p ../kwaiparse-artifacts
+          make clean all FINALPACKAGE=1 -j$(sysctl -n hw.ncpu)
+          PATCH=$(find .theos -type f -name 'KwaiParsePatch.dylib' | head -n 1)
+          if [ -z "$PATCH" ]; then
+            echo "KwaiParsePatch.dylib not found"
+            exit 1
+          fi
+          cp -f "$PATCH" ../kwaiparse-artifacts/KwaiParsePatch.dylib
+          file ../kwaiparse-artifacts/KwaiParsePatch.dylib
+          shasum -a 256 ../kwaiparse-artifacts/KwaiParsePatch.dylib
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name: KwaiParsePatch
+          path: kwaiparse-artifacts/KwaiParsePatch.dylib
+
+      - name: Move kwaiparse-latest tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git tag -f kwaiparse-latest "$GITHUB_SHA"
+          git push origin refs/tags/kwaiparse-latest --force
+
+      - name: Replace kwaiparse-latest release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete kwaiparse-latest --yes || true
+
+      - name: Publish KwaiParsePatch release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: kwaiparse-latest
+          name: KwaiParsePatch Latest
+          body: |
+            Standalone Kuaishou iOS parser/download injection plugin.
+            Target bundle: com.jiangjia.gif.
+            Trigger: long-press on a Kuaishou video playback page.
+            Menu actions: Interface Parse / Settings.
+            No private resolver URL is embedded in the dylib.
+            Resolver uses the DYYY-compatible video_list protocol.
+          prerelease: false
+          overwrite_files: true
+          files: kwaiparse-artifacts/KwaiParsePatch.dylib
