@@ -126,6 +126,23 @@
     // 创建自定义功能按钮
     NSMutableArray *viewModels = [NSMutableArray array];
 
+    // 仅在启用接口保存的诊断构建中显示，不改变现有保存/下载流程。
+    if (enableApiDownload) {
+        AWELongPressPanelBaseViewModel *storyDiagnostic = [[%c(AWELongPressPanelBaseViewModel) alloc] init];
+        storyDiagnostic.actionType = 6983;
+        storyDiagnostic.duxIconName = @"ic_cloudarrowdown_outlined_20";
+        storyDiagnostic.describeString = @"日常诊断";
+        storyDiagnostic.action = ^{
+          AWEAwemeModel *currentAweme = self.awemeModel;
+          NSString *summary = [DYYYUtils storyDiagnosticJSONForAweme:currentAweme];
+          [UIPasteboard generalPasteboard].string = summary;
+          [DYYYUtils showToast:@"日常诊断已复制，可粘贴至聊天"];
+          AWELongPressPanelManager *panel = [%c(AWELongPressPanelManager) shareInstance];
+          [panel dismissWithAnimation:YES completion:nil];
+        };
+        [viewModels addObject:storyDiagnostic];
+    }
+
     BOOL isNewLivePhoto = (self.awemeModel.video && self.awemeModel.animatedImageVideoInfo != nil);
 
     // 视频下载功能 (非实况照片才显示)
@@ -893,6 +910,23 @@
     AWELongPressPanelViewGroupModel *newGroupModel = [[%c(AWELongPressPanelViewGroupModel) alloc] init];
     newGroupModel.groupType = 0;
     NSMutableArray *viewModels = [NSMutableArray array];
+
+    // 仅在启用接口保存的诊断构建中显示，不改变现有保存/下载流程。
+    if (enableApiDownload) {
+        AWELongPressPanelBaseViewModel *storyDiagnostic = [[%c(AWELongPressPanelBaseViewModel) alloc] init];
+        storyDiagnostic.actionType = 6983;
+        storyDiagnostic.duxIconName = @"ic_cloudarrowdown_outlined_20";
+        storyDiagnostic.describeString = @"日常诊断";
+        storyDiagnostic.action = ^{
+          AWEAwemeModel *currentAweme = self.awemeModel;
+          NSString *summary = [DYYYUtils storyDiagnosticJSONForAweme:currentAweme];
+          [UIPasteboard generalPasteboard].string = summary;
+          [DYYYUtils showToast:@"日常诊断已复制，可粘贴至聊天"];
+          AWELongPressPanelManager *panel = [%c(AWELongPressPanelManager) shareInstance];
+          [panel dismissWithAnimation:YES completion:nil];
+        };
+        [viewModels addObject:storyDiagnostic];
+    }
 
     BOOL isNewLivePhoto = (self.awemeModel.video && self.awemeModel.animatedImageVideoInfo != nil);
 
