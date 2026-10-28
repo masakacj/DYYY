@@ -953,6 +953,98 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     return @"";
 }
 
+// 图片诊断只输出媒体模型结构、域名与模板，不返回 CDN 签名 URL 或账号凭据。
++ (NSArray *)dyyyImageDiagnosticURLs:(id)value {
+    if ([value isKindOfClass:[NSArray class]]) return value;
+    if ([value isKindOfClass:[NSString class]]) return @[value];
+    id list = [self dyyyStorySafeValue:value key:@"originURLList"];
+    if (![list isKindOfClass:[NSArray class]]) {
+        list = [self dyyyStorySafeValue:value key:@"urlList"];
+    }
+    return [list isKindOfClass:[NSArray class]] ? list : @[];
+}
+
++ (NSDictionary *)dyyyImageDiagnosticURLSummary:(id)value {
+    NSString *raw = [value isKindOfClass:[NSString class]] ? value : @"";
+    NSURLComponents *parts = [NSURLComponents componentsWithString:raw];
+    NSString *path = parts.path ?: @"";
+    NSString *templateName = @"";
+    NSRange templateRange = [path rangeOfString:@"~tplv-" options:NSBackwardsSearch];
+    if (templateRange.location != NSNotFound) {
+        NSString *suffix = [path substringFromIndex:templateRange.location + 1];
+        templateName = [suffix componentsSeparatedByString:@"/"].firstObject ?: @"";
+        if (templateName.length > 110) templateName = [templateName substringToIndex:110];
+    }
+
+    NSString *extension = path.pathExtension.lowercaseString ?: @"";
+    return @{
+        @"host": parts.host ?: @"",
+        @"template": templateName,
+        @"extension": extension,
+        @"has_query": @(parts.percentEncodedQuery.length > 0),
+        @"url_valid": @(parts.host.length > 0 &&
+                        ([parts.scheme isEqualToString:@"https"] || [parts.scheme isEqualToString:@"http"]))
+    };
+}
+
++ (NSDictionary *)dyyyImageDiagnosticDimensions:(id)image {
+    NSMutableDictionary *dimensions = [NSMutableDictionary dictionary];
+    for (NSString *key in @[@"width", @"height", @"imageWidth", @"imageHeight"]) {
+        id value = [self dyyyStorySafeValue:image key:key];
+        if ([value respondsToSelector:@selector(doubleValue)]) {
+            double n = [value doubleValue];
+            if (isfinite(n) && n > 0 && n <= 100000) dimensions[key] = @((NSInteger)n);
+        }
+    }
+    return dimensions;
+}
+
++ (NSArray *)dyyyImageDiagnosticsForAweme:(AWEAwemeModel *)aweme {
+    id rawImages = [self dyyyStorySafeValue:aweme key:@"albumImages"];
+    if (![rawImages isKindOfClass:[NSArray class]]) return @[];
+    NSArray *images = (NSArray *)rawImages;
+    NSMutableArray *summaries = [NSMutableArray array];
+    NSUInteger limit = MIN(images.count, 12);
+    for (NSUInteger index = 0; index < limit; index++) {
+        id image = images[index];
+        NSArray *allURLs = [self dyyyImageDiagnosticURLs:[self dyyyStorySafeValue:image key:@"urlList"]];
+        NSMutableArray *candidates = [NSMutableArray array];
+        NSUInteger chosen = NSNotFound;
+        for (NSUInteger i = 0; i < MIN(allURLs.count, 8); i++) {
+            id item = allURLs[i];
+            NSDictionary *summary = [self dyyyImageDiagnosticURLSummary:item];
+            [candidates addObject:summary];
+            if (chosen == NSNotFound &&
+                ![summary[@"extension"] isEqualToString:@"image"] &&
+                [summary[@"url_valid"] boolValue]) chosen = i;
+        }
+
+        NSMutableDictionary *otherVariants = [NSMutableDictionary dictionary];
+        for (NSString *key in @[@"originUrl", @"originURL", @"bigUrl", @"largeUrl",
+                                 @"mediumUrl", @"downloadUrl", @"downloadURL"]) {
+            id source = [self dyyyStorySafeValue:image key:key];
+            NSArray *variants = [self dyyyImageDiagnosticURLs:source];
+            if (variants.count > 0) {
+                otherVariants[key] = @{
+                    @"count": @(variants.count),
+                    @"first": [self dyyyImageDiagnosticURLSummary:variants.firstObject]
+                };
+            }
+        }
+
+        [summaries addObject:@{
+            @"index": @(index + 1),
+            @"url_count": @(allURLs.count),
+            @"current_download_url_index": chosen == NSNotFound ? @(-1) : @(chosen),
+            @"candidates": candidates,
+            @"other_variants": otherVariants,
+            @"model_dimensions": [self dyyyImageDiagnosticDimensions:image],
+            @"has_live_video": @([self dyyyStorySafeValue:image key:@"clipVideo"] != nil)
+        }];
+    }
+    return summaries;
+}
+
 + (NSString *)storyDiagnosticJSONForAweme:(AWEAwemeModel *)aweme {
     NSString *itemID = [self dyyyStorySafeValue:aweme key:@"itemID"];
     if (![itemID isKindOfClass:[NSString class]]) itemID = @"";
@@ -980,8 +1072,13 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     }
 
     NSDictionary *report = @{
-        @"diagnostic": @"DYYY-story-readonly-v1",
+        @"diagnostic": @"DYYY-media-readonly-v2",
         @"item_id": itemID,
+        @"story_sample_id": @"7701271139536029307",
+        @"aweme_type": @([aweme respondsToSelector:@selector(awemeType)] ? aweme.awemeType : -1),
+        @"album_image_count": @([aweme.albumImages isKindOfClass:[NSArray class]] ? aweme.albumImages.count : 0),
+        @"current_image_index": @([aweme respondsToSelector:@selector(currentImageIndex)] ? aweme.currentImageIndex : 0),
+        @"images": [self dyyyImageDiagnosticsForAweme:aweme],
         @"matches_sample": @([itemID isEqualToString:@"7701271139536029307"]),
         @"has_aweme_model": @(aweme != nil),
         @"has_video_model": @(video != nil),
