@@ -900,6 +900,102 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     }
 }
 
+#pragma mark - Douyin Story Read-only Diagnostics
+
++ (id)dyyyStorySafeValue:(id)object key:(NSString *)key {
+    if (!object || key.length == 0) return nil;
+    @try {
+        id value = [object valueForKey:key];
+        return value == [NSNull null] ? nil : value;
+    } @catch (NSException *exception) {
+        return nil;
+    }
+}
+
++ (NSString *)dyyyStoryMediaURI:(id)address {
+    id value = [self dyyyStorySafeValue:address key:@"URI"];
+    if (![value isKindOfClass:[NSString class]]) return @"";
+    NSString *uri = (NSString *)value;
+    // 只导出可用于原画验证的媒体 ID，不导出签名播放链接或其它令牌。
+    NSRegularExpression *pattern = [NSRegularExpression regularExpressionWithPattern:@"^v[a-zA-Z0-9_-]{12,100}$" options:0 error:nil];
+    NSRange fullRange = NSMakeRange(0, uri.length);
+    return [pattern firstMatchInString:uri options:0 range:fullRange] ? uri : @"";
+}
+
++ (NSString *)storyItemIDForAweme:(AWEAwemeModel *)aweme {
+    id candidate = [self dyyyStorySafeValue:aweme key:@"itemID"];
+    if (![candidate isKindOfClass:[NSString class]]) return @"";
+    NSString *value = (NSString *)candidate;
+    if (value.length < 12 || value.length > 32) return @"";
+    NSCharacterSet *notDigits = [[NSCharacterSet decimalDigitCharacterSet] invertedSet];
+    return [value rangeOfCharacterFromSet:notDigits].location == NSNotFound ? value : @"";
+}
+
++ (NSString *)storyVideoURIForAweme:(AWEAwemeModel *)aweme {
+    id video = [self dyyyStorySafeValue:aweme key:@"video"];
+    if (!video) return @"";
+
+    // 主播放对象优先，避免错误选择画质档位对应的其它媒体。
+    for (NSString *key in @[@"playURL", @"h264URL"]) {
+        NSString *uri = [self dyyyStoryMediaURI:[self dyyyStorySafeValue:video key:key]];
+        if (uri.length > 0) return uri;
+    }
+
+    // 个别视频没有主播放 URI，但码率列表仍保留真实媒体 URI。
+    for (NSString *key in @[@"bitrateModels", @"manualBitrateModels"]) {
+        id models = [self dyyyStorySafeValue:video key:key];
+        if (![models isKindOfClass:[NSArray class]]) continue;
+        for (id model in (NSArray *)models) {
+            NSString *uri = [self dyyyStoryMediaURI:[self dyyyStorySafeValue:model key:@"playAddr"]];
+            if (uri.length > 0) return uri;
+        }
+    }
+    return @"";
+}
+
++ (NSString *)storyDiagnosticJSONForAweme:(AWEAwemeModel *)aweme {
+    NSString *itemID = [self dyyyStorySafeValue:aweme key:@"itemID"];
+    if (![itemID isKindOfClass:[NSString class]]) itemID = @"";
+    id video = [self dyyyStorySafeValue:aweme key:@"video"];
+    id playAddr = [self dyyyStorySafeValue:video key:@"playURL"];
+    id h264Addr = [self dyyyStorySafeValue:video key:@"h264URL"];
+    id bitrates = [self dyyyStorySafeValue:video key:@"bitrateModels"];
+    NSArray *rateList = [bitrates isKindOfClass:[NSArray class]] ? bitrates : @[];
+    id playURLs = [self dyyyStorySafeValue:playAddr key:@"originURLList"];
+    id h264URLs = [self dyyyStorySafeValue:h264Addr key:@"originURLList"];
+    id uriKey = [self dyyyStorySafeValue:playAddr key:@"URLKey"];
+
+    NSMutableArray *rates = [NSMutableArray array];
+    NSUInteger cap = MIN(rateList.count, 8);
+    for (NSUInteger index = 0; index < cap; index++) {
+        id rate = rateList[index];
+        id rateAddr = [self dyyyStorySafeValue:rate key:@"playAddr"];
+        id bitRate = [self dyyyStorySafeValue:rate key:@"bitrate"];
+        id urls = [self dyyyStorySafeValue:rateAddr key:@"originURLList"];
+        [rates addObject:@{
+            @"bitrate": [bitRate isKindOfClass:[NSNumber class]] ? bitRate : @0,
+            @"uri": [self dyyyStoryMediaURI:rateAddr],
+            @"url_count": @([urls isKindOfClass:[NSArray class]] ? [urls count] : 0)
+        }];
+    }
+
+    NSDictionary *report = @{
+        @"diagnostic": @"DYYY-story-readonly-v1",
+        @"item_id": itemID,
+        @"matches_sample": @([itemID isEqualToString:@"7701271139536029307"]),
+        @"has_aweme_model": @(aweme != nil),
+        @"has_video_model": @(video != nil),
+        @"play_uri": [self dyyyStoryMediaURI:playAddr],
+        @"play_has_url_key": @([uriKey isKindOfClass:[NSString class]] && [uriKey length] > 0),
+        @"play_url_count": @([playURLs isKindOfClass:[NSArray class]] ? [playURLs count] : 0),
+        @"h264_url_count": @([h264URLs isKindOfClass:[NSArray class]] ? [h264URLs count] : 0),
+        @"bitrate_count": @(rateList.count),
+        @"bitrates": rates
+    };
+    NSData *json = [NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil];
+    return json ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"诊断序列化失败";
+}
+
 + (BOOL)isDarkMode {
     Class themeManagerClass = NSClassFromString(@"AWEUIThemeManager");
     if (!themeManagerClass) {

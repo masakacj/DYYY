@@ -80,6 +80,12 @@ NS_ASSUME_NONNULL_BEGIN
  */
 + (void)showToast:(NSString *)text;
 
+/** 只读采集当前作品的媒体 URI 和码率摘要；不包含播放 URL、Cookie 或登录数据。 */
++ (NSString *)storyDiagnosticJSONForAweme:(AWEAwemeModel *_Nullable)aweme;
+/** 当前作品的 ID 与可信格式的媒体 URI，供日常过滤时使用；不包含任何签名链接。 */
++ (NSString *)storyItemIDForAweme:(AWEAwemeModel *_Nullable)aweme;
++ (NSString *)storyVideoURIForAweme:(AWEAwemeModel *_Nullable)aweme;
+
 /**
  * 检查当前是否为暗黑模式
  */
