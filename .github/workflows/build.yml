@@ -39,6 +39,7 @@ jobs:
           python3 .github/scripts/bind_api_quality_context.py .
           python3 .github/scripts/align_api_with_save_video.py .
           python3 .github/scripts/add_app_media_first.py .
+          python3 .github/scripts/check_jpeg_raw_import.py .
           git diff -- DYYYManager.h DYYYManager.m DYYYLongPressPanel.xm
 
       - name: Check cache

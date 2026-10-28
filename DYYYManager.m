@@ -265,6 +265,37 @@ static DYYYToast *gCJRemoteRequestProgressView = nil;
           });
       };
 
+      // JPEG 原始文件直存：不经过 UIImage 解码、绘制或重新编码。
+      // 仅针对检测到 JPEG 文件头的普通图片；VVIC/HEIC、实况照片和视频保持原逻辑。
+      if (mediaType == MediaTypeImage &&
+          [[DYYYUtils detectFileFormat:mediaURL] isEqualToString:@"jpeg"]) {
+          NSString *originalFilename = mediaURL.lastPathComponent;
+          NSString *extension = originalFilename.pathExtension.lowercaseString;
+          if (![extension isEqualToString:@"jpg"] && ![extension isEqualToString:@"jpeg"]) {
+              originalFilename = [[originalFilename stringByDeletingPathExtension] stringByAppendingPathExtension:@"jpg"];
+          }
+
+          [[PHPhotoLibrary sharedPhotoLibrary]
+              performChanges:^{
+                PHAssetCreationRequest *request = [PHAssetCreationRequest creationRequestForAsset];
+                PHAssetResourceCreationOptions *options = [[PHAssetResourceCreationOptions alloc] init];
+                options.originalFilename = originalFilename;
+                options.shouldMoveFile = NO;
+                [request addResourceWithType:PHAssetResourceTypePhoto fileURL:mediaURL options:options];
+              }
+              completionHandler:^(BOOL success, NSError *_Nullable error) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                  NSLog(@"[DYYY JPEG raw import] success=%d error=%ld", success, (long)error.code);
+                  if (!success) {
+                      [DYYYUtils showToast:@"JPEG原文件保存失败"];
+                  }
+                  [[NSFileManager defaultManager] removeItemAtPath:mediaURL.path error:nil];
+                  reportResult(success);
+                });
+              }];
+          return;
+      }
+
       if (mediaType == MediaTypeHeic) {
           NSString *actualFormat = [DYYYUtils detectFileFormat:mediaURL];
 
