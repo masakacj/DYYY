@@ -131,12 +131,12 @@
         AWELongPressPanelBaseViewModel *storyDiagnostic = [[%c(AWELongPressPanelBaseViewModel) alloc] init];
         storyDiagnostic.actionType = 6983;
         storyDiagnostic.duxIconName = @"ic_cloudarrowdown_outlined_20";
-        storyDiagnostic.describeString = @"日常诊断";
+        storyDiagnostic.describeString = @"媒体诊断";
         storyDiagnostic.action = ^{
           AWEAwemeModel *currentAweme = self.awemeModel;
           NSString *summary = [DYYYUtils storyDiagnosticJSONForAweme:currentAweme];
           [UIPasteboard generalPasteboard].string = summary;
-          [DYYYUtils showToast:@"日常诊断已复制，可粘贴至聊天"];
+          [DYYYUtils showToast:@"媒体诊断已复制，可粘贴至聊天"];
           AWELongPressPanelManager *panel = [%c(AWELongPressPanelManager) shareInstance];
           [panel dismissWithAnimation:YES completion:nil];
         };
@@ -916,12 +916,12 @@
         AWELongPressPanelBaseViewModel *storyDiagnostic = [[%c(AWELongPressPanelBaseViewModel) alloc] init];
         storyDiagnostic.actionType = 6983;
         storyDiagnostic.duxIconName = @"ic_cloudarrowdown_outlined_20";
-        storyDiagnostic.describeString = @"日常诊断";
+        storyDiagnostic.describeString = @"媒体诊断";
         storyDiagnostic.action = ^{
           AWEAwemeModel *currentAweme = self.awemeModel;
           NSString *summary = [DYYYUtils storyDiagnosticJSONForAweme:currentAweme];
           [UIPasteboard generalPasteboard].string = summary;
-          [DYYYUtils showToast:@"日常诊断已复制，可粘贴至聊天"];
+          [DYYYUtils showToast:@"媒体诊断已复制，可粘贴至聊天"];
           AWELongPressPanelManager *panel = [%c(AWELongPressPanelManager) shareInstance];
           [panel dismissWithAnimation:YES completion:nil];
         };
