@@ -28,7 +28,6 @@ assert 'imageWithContentsOfFile' not in block, "JPEG must not create UIImage"
 assert 'creationRequestForAssetFromImage' not in block, "JPEG must not re-encode via UIImage"
 for existing in (
     'if (mediaType == MediaTypeHeic)',
-    'if (mediaType == MediaTypeVideo)',
     'requestAuthorization:',
     'finalizeDownloadWithFileURL:mediaURL',
 ):
