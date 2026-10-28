@@ -134,9 +134,7 @@
         storyDiagnostic.describeString = @"媒体诊断";
         storyDiagnostic.action = ^{
           AWEAwemeModel *currentAweme = self.awemeModel;
-          NSString *summary = [DYYYUtils storyDiagnosticJSONForAweme:currentAweme];
-          [UIPasteboard generalPasteboard].string = summary;
-          [DYYYUtils showToast:@"媒体诊断已复制，可粘贴至聊天"];
+          [DYYYManager copyMediaDiagnosticForAweme:currentAweme];
           AWELongPressPanelManager *panel = [%c(AWELongPressPanelManager) shareInstance];
           [panel dismissWithAnimation:YES completion:nil];
         };
@@ -919,9 +917,7 @@
         storyDiagnostic.describeString = @"媒体诊断";
         storyDiagnostic.action = ^{
           AWEAwemeModel *currentAweme = self.awemeModel;
-          NSString *summary = [DYYYUtils storyDiagnosticJSONForAweme:currentAweme];
-          [UIPasteboard generalPasteboard].string = summary;
-          [DYYYUtils showToast:@"媒体诊断已复制，可粘贴至聊天"];
+          [DYYYManager copyMediaDiagnosticForAweme:currentAweme];
           AWELongPressPanelManager *panel = [%c(AWELongPressPanelManager) shareInstance];
           [panel dismissWithAnimation:YES completion:nil];
         };

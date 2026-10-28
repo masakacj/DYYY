@@ -1004,7 +1004,7 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     if (![rawImages isKindOfClass:[NSArray class]]) return @[];
     NSArray *images = (NSArray *)rawImages;
     NSMutableArray *summaries = [NSMutableArray array];
-    NSUInteger limit = MIN(images.count, 12);
+    NSUInteger limit = MIN(images.count, 24);
     for (NSUInteger index = 0; index < limit; index++) {
         id image = images[index];
         NSArray *allURLs = [self dyyyImageDiagnosticURLs:[self dyyyStorySafeValue:image key:@"urlList"]];

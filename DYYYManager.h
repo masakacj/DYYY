@@ -32,6 +32,12 @@
  */
 + (void)saveMedia:(NSURL *)mediaURL mediaType:(MediaType)mediaType completion:(void (^)(BOOL success))completion;
 
+/** 只读对比当前图集图片的原图候选与 JPEG 版本，结果不含签名 URL。 */
++ (void)probeCurrentAlbumImageForAweme:(AWEAwemeModel *)aweme
+                            completion:(void (^)(NSDictionary *result))completion;
+/** 用户主动触发的只读媒体诊断：图片追加实际文件大小、尺寸和类型后复制结果。 */
++ (void)copyMediaDiagnosticForAweme:(AWEAwemeModel *)aweme;
+
 /**
  * 保存实况照片
  * @param imageSourcePath 图片源路径

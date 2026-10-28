@@ -82,6 +82,157 @@ static DYYYToast *gCJRemoteRequestProgressView = nil;
     return self;
 }
 
+#pragma mark - 图片候选实际质量只读诊断
+
++ (void)dyyyProbeImageCandidates:(NSArray<NSDictionary *> *)candidates
+                        position:(NSUInteger)position
+                         results:(NSMutableArray<NSDictionary *> *)results
+                      completion:(void (^)(NSArray<NSDictionary *> *rows))completion {
+    if (position >= candidates.count) {
+        if (completion) completion([results copy]);
+        return;
+    }
+
+    NSDictionary *candidate = candidates[position];
+    NSString *rawURL = candidate[@"url"];
+    NSString *kind = candidate[@"kind"] ?: @"unknown";
+    NSURLComponents *components = [NSURLComponents componentsWithString:rawURL];
+    NSString *host = components.host.lowercaseString ?: @"";
+    BOOL trustedHost = [host isEqualToString:@"douyinpic.com"] ||
+                       [host hasSuffix:@".douyinpic.com"];
+    if (![components.scheme.lowercaseString isEqualToString:@"https"] || !trustedHost) {
+        [results addObject:@{@"kind":kind, @"valid":@NO, @"error":@"invalid_cdn_host"}];
+        [self dyyyProbeImageCandidates:candidates position:position + 1 results:results completion:completion];
+        return;
+    }
+
+    NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    configuration.timeoutIntervalForRequest = 16;
+    configuration.timeoutIntervalForResource = 24;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration];
+    NSDate *started = [NSDate date];
+    NSURLSessionDownloadTask *task = [session downloadTaskWithURL:components.URL
+                                              completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
+        NSInteger status = [response isKindOfClass:[NSHTTPURLResponse class]]
+            ? [(NSHTTPURLResponse *)response statusCode] : 0;
+        NSMutableDictionary *row = [NSMutableDictionary dictionaryWithDictionary:@{
+            @"kind": kind,
+            @"http_status": @(status),
+            @"mime_type": response.MIMEType ?: @"",
+            @"elapsed_ms": @((NSInteger)([[NSDate date] timeIntervalSinceDate:started] * 1000))
+        }];
+        if (error) {
+            row[@"error_code"] = @(error.code);
+        }
+        if (!error && status == 200 && location.isFileURL) {
+            NSDictionary *attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:location.path error:nil];
+            unsigned long long bytes = [attributes[NSFileSize] unsignedLongLongValue];
+            row[@"bytes"] = @(bytes);
+
+            CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)location, NULL);
+            if (source) {
+                NSDictionary *properties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, 0, NULL));
+                NSInteger width = [properties[(NSString *)kCGImagePropertyPixelWidth] integerValue];
+                NSInteger height = [properties[(NSString *)kCGImagePropertyPixelHeight] integerValue];
+                CFStringRef uti = CGImageSourceGetType(source);
+                row[@"width"] = @(width);
+                row[@"height"] = @(height);
+                row[@"format_uti"] = uti ? [(__bridge NSString *)uti copy] : @"";
+                row[@"valid"] = @(bytes > 0 && width > 0 && height > 0);
+                CFRelease(source);
+            } else {
+                row[@"valid"] = @NO;
+                row[@"error"] = @"unsupported_image_data";
+            }
+        } else {
+            row[@"valid"] = @NO;
+        }
+        [results addObject:row];
+        [session finishTasksAndInvalidate];
+        [self dyyyProbeImageCandidates:candidates position:position + 1 results:results completion:completion];
+    }];
+    [task resume];
+}
+
++ (void)probeCurrentAlbumImageForAweme:(AWEAwemeModel *)aweme
+                            completion:(void (^)(NSDictionary *result))completion {
+    NSArray *images = [aweme.albumImages isKindOfClass:[NSArray class]] ? aweme.albumImages : @[];
+    NSInteger current = aweme.currentImageIndex;
+    if (current < 1 || current > (NSInteger)images.count) current = 1;
+    if (images.count == 0) {
+        if (completion) completion(@{@"error":@"not_an_image_album"});
+        return;
+    }
+
+    AWEImageAlbumImageModel *image = images[(NSUInteger)(current - 1)];
+    NSArray *urls = [image.urlList isKindOfClass:[NSArray class]] ? image.urlList : @[];
+    NSString *originURL = nil;
+    NSString *jpegURL = nil;
+    for (id candidate in urls) {
+        if (![candidate isKindOfClass:[NSString class]]) continue;
+        NSURLComponents *parts = [NSURLComponents componentsWithString:candidate];
+        NSString *path = parts.path.lowercaseString ?: @"";
+        if (!originURL && [path containsString:@"origin.image"]) originURL = candidate;
+        if (!jpegURL && [path containsString:@"q80.jpeg"]) jpegURL = candidate;
+    }
+
+    NSMutableArray *candidates = [NSMutableArray array];
+    if (originURL.length) [candidates addObject:@{@"kind":@"origin", @"url":originURL}];
+    if (jpegURL.length && ![jpegURL isEqualToString:originURL]) {
+        [candidates addObject:@{@"kind":@"q80_jpeg", @"url":jpegURL}];
+    }
+
+    if (candidates.count == 0) {
+        if (completion) completion(@{@"image_index":@(current), @"error":@"no_comparable_candidates"});
+        return;
+    }
+
+    NSDate *started = [NSDate date];
+    [self dyyyProbeImageCandidates:candidates
+                          position:0
+                           results:[NSMutableArray array]
+                        completion:^(NSArray<NSDictionary *> *rows) {
+        NSDictionary *report = @{
+            @"image_index": @(current),
+            @"probe_count": @(rows.count),
+            @"probes": rows,
+            @"elapsed_ms": @((NSInteger)([[NSDate date] timeIntervalSinceDate:started] * 1000)),
+            @"note": @"只读比较实际图片字节和尺寸，尚未改变保存规则"
+        };
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (completion) completion(report);
+        });
+    }];
+}
+
++ (void)copyMediaDiagnosticForAweme:(AWEAwemeModel *)aweme {
+    NSString *baseJSON = [DYYYUtils storyDiagnosticJSONForAweme:aweme];
+    NSData *baseData = [baseJSON dataUsingEncoding:NSUTF8StringEncoding];
+    id parsed = baseData ? [NSJSONSerialization JSONObjectWithData:baseData options:NSJSONReadingMutableContainers error:nil] : nil;
+    NSMutableDictionary *base = [parsed isKindOfClass:[NSDictionary class]]
+        ? [(NSDictionary *)parsed mutableCopy] : [NSMutableDictionary dictionary];
+    base[@"diagnostic"] = @"DYYY-media-readonly-v3";
+
+    void (^copyReport)(NSDictionary *) = ^(NSDictionary *probe) {
+        if (probe) base[@"image_quality_probe"] = probe;
+        NSData *data = [NSJSONSerialization dataWithJSONObject:base options:NSJSONWritingPrettyPrinted error:nil];
+        NSString *text = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : baseJSON;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [UIPasteboard generalPasteboard].string = text;
+            [DYYYUtils showToast:@"媒体诊断已复制，可粘贴至聊天"];
+        });
+    };
+
+    if (!aweme || aweme.awemeType != 68 || aweme.albumImages.count == 0) {
+        copyReport(nil);
+        return;
+    }
+    [DYYYUtils showToast:@"正在检测当前图片原图和JPEG质量"];
+    [self probeCurrentAlbumImageForAweme:aweme completion:^(NSDictionary *probe) {
+        copyReport(probe);
+    }];
+}
+
 + (void)saveMedia:(NSURL *)mediaURL mediaType:(MediaType)mediaType completion:(void (^)(BOOL success))completion {
     if (mediaType == MediaTypeAudio) {
         if (completion) {
